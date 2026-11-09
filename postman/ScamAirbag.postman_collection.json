@@ -1,0 +1,56 @@
+{
+  "info": {
+    "name": "ScamAirbag API",
+    "description": "Health, validated investigation, and streaming investigation requests. Use your own PayPal Sandbox IDs and never store secrets in this collection.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000" },
+    { "key": "invoiceId", "value": "REPLACE_WITH_YOUR_SANDBOX_INVOICE_ID" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/health" }
+    },
+    {
+      "name": "Investigate suspicious message",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_text\": \"A seller sent me an invoice and says I must pay immediately.\",\n  \"identifier\": null,\n  \"identifier_hint\": \"UNKNOWN\",\n  \"share_anonymized_intelligence\": false\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/investigate"
+      }
+    },
+    {
+      "name": "Investigate PayPal Sandbox invoice",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_text\": \"Please verify this invoice.\",\n  \"identifier\": \"{{invoiceId}}\",\n  \"identifier_hint\": \"INVOICE\",\n  \"share_anonymized_intelligence\": false\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/investigate"
+      }
+    },
+    {
+      "name": "Stream investigation (SSE)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Accept", "value": "text/event-stream" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_text\": \"Please investigate this payment request.\",\n  \"identifier\": null,\n  \"identifier_hint\": \"UNKNOWN\",\n  \"share_anonymized_intelligence\": false\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/investigate/stream"
+      }
+    }
+  ]
+}

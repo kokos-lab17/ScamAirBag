@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: scamairbag-api
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: CORS_ORIGINS
+        value: https://scamairbag-web.onrender.com
+      - key: PAYPAL_BASE_URL
+        value: https://api-m.sandbox.paypal.com
+      - key: ELASTIC_STORE_CASES
+        value: "false"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: ELASTICSEARCH_URL
+        sync: false
+      - key: ELASTIC_API_KEY
+        sync: false
+      - key: RENDER_API_KEY
+        sync: false
+      - key: RENDER_INDEX_TASK_SLUG
+        sync: false
+
+  - type: static
+    name: scamairbag-web
+    buildCommand: echo "Publishing ScamAirbag frontend"
+    staticPublishPath: ./frontend

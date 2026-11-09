@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101827">
+  <title>ScamAirbag — Pre-payment investigation</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@32.3.9/styles/ag-grid.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@32.3.9/styles/ag-theme-quartz-dark.css">
+  <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@32.3.9/dist/ag-grid-community.min.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1220; --panel: #121d2e; --panel2: #172438;
+      --text: #edf3fb; --muted: #9aabc0; --line: #293950;
+      --accent: #7dd3fc; --green: #86efac; --yellow: #fcd34d;
+      --red: #fca5a5; --purple: #c4b5fd;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: radial-gradient(circle at 15% 0%, #172b42 0, var(--bg) 42%);
+      color: var(--text); font: 15px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+    }
+    .shell { width: min(1060px, calc(100% - 32px)); margin: 0 auto; padding: 42px 0 64px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 30px; }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .logo { width: 42px; height: 42px; display:grid; place-items:center; border-radius: 13px; background:#183b52; color:var(--accent); font-weight:900; font-size:21px; }
+    h1 { font-size: 21px; margin: 0; letter-spacing: -.4px; }
+    .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+    .api { display:flex; gap:8px; align-items:center; color:var(--muted); font-size:12px; }
+    .api input { width: 205px; }
+    .panel { background: color-mix(in srgb, var(--panel) 94%, transparent); border:1px solid var(--line); border-radius:17px; padding:22px; box-shadow: 0 18px 50px #0002; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+    .field { margin-bottom: 14px; }
+    label { display:block; color:#c6d4e5; font-size:13px; font-weight:650; margin-bottom:7px; }
+    textarea, input, select {
+      width:100%; color:var(--text); background:#0c1727; border:1px solid #34465e;
+      border-radius:10px; padding:12px 13px; outline:none; font:inherit;
+    }
+    textarea { min-height:155px; resize:vertical; }
+    textarea:focus, input:focus, select:focus { border-color:var(--accent); box-shadow:0 0 0 3px #7dd3fc20; }
+    .hint { color:var(--muted); font-size:12px; margin-top:6px; }
+    button { border:0; border-radius:10px; padding:12px 18px; font-weight:750; cursor:pointer; background:#7dd3fc; color:#082033; }
+    button:disabled { opacity:.55; cursor:wait; }
+    .secondary { background:#23364d; color:var(--text); }
+    .actions { display:flex; align-items:center; gap:12px; margin-top:5px; }
+    .status { color:var(--muted); font-size:13px; }
+    .hidden { display:none !important; }
+    #results { margin-top:20px; display:grid; gap:16px; }
+    .section-title { margin:0 0 13px; font-size:15px; }
+    .score-layout { display:grid; grid-template-columns:150px 1fr; gap:22px; align-items:center; }
+    .score-ring { width:132px; height:132px; border-radius:50%; display:grid; place-items:center; background:conic-gradient(var(--accent) var(--score-angle, 0deg), #26384d 0); position:relative; }
+    .score-ring:before { content:""; position:absolute; inset:9px; border-radius:50%; background:var(--panel); }
+    .score-number { position:relative; text-align:center; font-size:32px; font-weight:850; line-height:1.05; }
+    .score-number small { display:block; font-size:11px; color:var(--muted); font-weight:600; margin-top:5px; }
+    .summary { color:#d6e2f0; margin:0 0 10px; }
+    .pills { display:flex; flex-wrap:wrap; gap:7px; }
+    .pill { border:1px solid var(--line); background:#18273a; color:#dce8f5; border-radius:999px; padding:4px 9px; font-size:11px; }
+    .pill.high, .pill.critical { color:var(--red); border-color:#713d48; }
+    .pill.medium { color:var(--yellow); border-color:#65552c; }
+    .pill.low, .pill.info { color:var(--green); border-color:#315c48; }
+    .finding { padding:13px 0; border-top:1px solid var(--line); }
+    #findingsGrid { width:100%; height:300px; --ag-background-color:#121d2e; --ag-foreground-color:#edf3fb; --ag-header-background-color:#172438; --ag-border-color:#293950; --ag-row-hover-color:#20334b; }
+    .consent { display:flex; gap:9px; align-items:flex-start; color:var(--muted); font-size:12px; margin:5px 0 14px; }
+    .consent input { width:auto; margin-top:3px; }
+    .finding:first-of-type { border-top:0; padding-top:0; }
+    .finding-head { display:flex; justify-content:space-between; gap:12px; align-items:center; }
+    .finding p { margin:6px 0 0; color:#c4d1e0; font-size:13px; }
+    .meta { color:var(--muted); font-size:11px; margin-top:5px; }
+    .timeline { display:grid; gap:10px; }
+    .event { display:flex; gap:12px; align-items:flex-start; }
+    .dot { width:8px; height:8px; flex:0 0 8px; margin-top:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 4px #7dd3fc18; }
+    .event strong { display:block; font-size:13px; }
+    .event span { display:block; color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
+    .two-col { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    .source-row { display:flex; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid var(--line); font-size:12px; }
+    .source-row:last-child { border-bottom:0; }
+    .source-row span:last-child { color:var(--muted); text-align:right; }
+    .notice { color:var(--muted); font-size:11px; text-align:center; margin-top:22px; }
+    .error { color:var(--red); }
+    @media(max-width:720px) {
+      .shell { padding-top:24px; } header { align-items:flex-start; flex-direction:column; }
+      .api { width:100%; } .api input { flex:1; width:auto; }
+      .grid,.two-col { grid-template-columns:1fr; }
+      .score-layout { grid-template-columns:105px 1fr; gap:15px; }
+      .score-ring { width:100px; height:100px; } .score-number { font-size:27px; }
+      .panel { padding:17px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div class="brand">
+        <div class="logo">A</div>
+        <div><h1>ScamAirbag</h1><div class="sub">Pre-payment investigation workspace</div></div>
+      </div>
+      <div class="api"><label for="apiBase" style="margin:0">API</label><input id="apiBase" value="" aria-label="API base URL"></div>
+    </header>
+
+    <section class="panel">
+      <h2 class="section-title">Investigate a payment request</h2>
+      <form id="investigationForm">
+        <div class="field">
+          <label for="userText">Message or payment request</label>
+          <textarea id="userText" maxlength="12000" placeholder="Paste the message, email, or payment instructions you want investigated..."></textarea>
+          <div class="hint">Treat this as untrusted evidence. Remove passwords, verification codes, and unrelated personal information before submitting.</div>
+        </div>
+        <div class="grid">
+          <div class="field">
+            <label for="identifier">PayPal Sandbox ID (optional)</label>
+            <input id="identifier" maxlength="200" placeholder="Invoice, order, or subscription ID">
+          </div>
+          <div class="field">
+            <label for="identifierHint">ID type</label>
+            <select id="identifierHint">
+              <option value="UNKNOWN">Select if an ID is provided</option>
+              <option value="INVOICE">Invoice</option>
+              <option value="ORDER">Order</option>
+              <option value="SUBSCRIPTION">Subscription</option>
+            </select>
+          </div>
+        </div>
+        <label class="consent"><input id="shareIntelligence" type="checkbox">
+          <span>Contribute anonymized investigation indicators to shared Elastic intelligence. Only checked domains, finding rule IDs, and a coarse risk band are stored — never the message, PayPal IDs, or email addresses. Optional; unchecked by default.</span>
+        </label>
+        <div class="actions">
+          <button id="submitButton" type="submit">Start investigation</button>
+          <button id="clearButton" class="secondary" type="button">Clear</button>
+          <span id="status" class="status" role="status">Ready when you are.</span>
+        </div>
+      </form>
+    </section>
+
+    <section id="results" class="hidden" aria-live="polite">
+      <div class="panel">
+        <h2 class="section-title">Airbag Scorecard</h2>
+        <div class="score-layout">
+          <div id="scoreRing" class="score-ring"><div class="score-number"><span id="riskScore">—</span><small>RISK SCORE</small></div></div>
+          <div>
+            <div class="pills" style="margin-bottom:10px">
+              <span id="riskLevel" class="pill">Awaiting result</span>
+              <span id="confidence" class="pill">Confidence: —</span>
+              <span id="coverage" class="pill">Coverage: —</span>
+            </div>
+            <p id="summary" class="summary">The agent's findings will appear here.</p>
+            <strong id="recommendation"></strong>
+          </div>
+        </div>
+      </div>
+      <div class="two-col">
+        <div class="panel">
+          <h2 class="section-title">Findings</h2>
+          <div id="findingsGrid" class="ag-theme-quartz-dark" aria-label="Interactive evidence findings grid"></div>
+          <div id="findingsFallback" class="status hidden">Interactive evidence grid unavailable. Findings are still included in the scorecard.</div>
+        </div>
+        <div class="panel">
+          <h2 class="section-title">Evidence coverage</h2>
+          <div id="sources"><div class="status">Waiting for source checks.</div></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2 class="section-title">Investigation activity</h2>
+        <div id="timeline" class="timeline"><div class="status">Waiting for agent activity.</div></div>
+      </div>
+    </section>
+    <p class="notice">ScamAirbag provides evidence-based risk indicators, not a guarantee that a payment is safe or fraudulent. Always verify through official PayPal channels before paying.</p>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const defaultApiBase = location.hostname.endsWith("onrender.com")
+      ? "https://scamairbag-api.onrender.com" : "http://localhost:8000";
+    $("apiBase").value = defaultApiBase;
+    const form = $("investigationForm");
+    const button = $("submitButton");
+    const statusEl = $("status");
+    let activeController = null;
+
+    const pretty = (value) => String(value ?? "").replaceAll("_", " ").toLowerCase()
+      .replace(/\b\w/g, c => c.toUpperCase());
+
+    function addActivity(title, detail = "") {
+      const timeline = $("timeline");
+      if (timeline.querySelector(".status")) timeline.innerHTML = "";
+      const row = document.createElement("div");
+      row.className = "event";
+      const dot = document.createElement("i");
+      dot.className = "dot";
+      const content = document.createElement("div");
+      const strong = document.createElement("strong");
+      strong.textContent = title;
+      const span = document.createElement("span");
+      span.textContent = detail;
+      content.append(strong, span);
+      row.append(dot, content);
+      timeline.append(row);
+    }
+
+    function setBusy(busy) {
+      button.disabled = busy;
+      button.textContent = busy ? "Investigating…" : "Start investigation";
+      $("clearButton").disabled = busy;
+    }
+
+    function renderScorecard(trace) {
+      const scorecard = trace?.final_scorecard;
+      if (!scorecard) throw new Error("The API returned no final scorecard.");
+      $("results").classList.remove("hidden");
+
+      const score = Number(scorecard.risk_score ?? 0);
+      $("riskScore").textContent = score;
+      $("scoreRing").style.setProperty("--score-angle", `${Math.max(0, Math.min(100, score)) * 3.6}deg`);
+      $("riskLevel").textContent = score >= 70 ? "High risk" : score >= 35 ? "Elevated risk" : "Lower observed risk";
+      $("riskLevel").className = `pill ${score >= 70 ? "high" : score >= 35 ? "medium" : "low"}`;
+      $("confidence").textContent = `Confidence: ${pretty(scorecard.confidence_level)}`;
+      $("coverage").textContent = `Coverage: ${scorecard.coverage_score}%`;
+      $("summary").textContent = scorecard.executive_summary || "No summary supplied.";
+      $("recommendation").textContent = `Recommendation: ${pretty(scorecard.recommended_action)}`;
+
+      const findingRows = (scorecard.findings || []).map((finding) => ({
+        rule: finding.rule_id || "Finding",
+        severity: pretty(finding.severity),
+        riskImpact: Number(finding.risk_impact ?? 0),
+        provenance: pretty(finding.provenance),
+        evidence: finding.supporting_evidence || "Not provided",
+        description: finding.description || ""
+      }));
+      const gridElement = $("findingsGrid");
+      if (window.agGrid?.createGrid) {
+        if (window.findingsGridApi) window.findingsGridApi.destroy();
+        window.findingsGridApi = window.agGrid.createGrid(gridElement, {
+          rowData: findingRows,
+          columnDefs: [
+            { field: "rule", headerName: "Indicator", minWidth: 175, filter: true },
+            { field: "severity", minWidth: 105, filter: true },
+            { field: "riskImpact", headerName: "Impact", width: 90, sort: "desc" },
+            { field: "provenance", headerName: "Evidence source", minWidth: 145, filter: true },
+            { field: "evidence", headerName: "Supporting evidence", minWidth: 260, flex: 1, wrapText: true, autoHeight: true }
+          ],
+          defaultColDef: { sortable: true, resizable: true },
+          animateRows: true,
+          overlayNoRowsTemplate: "<span class='ag-overlay-no-rows-center'>No risk findings. This is not proof the request is safe.</span>"
+        });
+        $("findingsFallback").classList.add("hidden");
+      } else {
+        gridElement.innerHTML = "";
+        $("findingsFallback").classList.remove("hidden");
+        $("findingsFallback").textContent = findingRows.length
+          ? findingRows.map(row => `${row.rule}: ${row.description} (${row.provenance})`).join(" · ")
+          : "No risk findings were returned. This is not proof that the request is safe.";
+      }
+
+      const sources = $("sources");
+      sources.replaceChildren();
+      if (!trace.source_outcomes?.length) {
+        sources.textContent = "No source outcomes returned.";
+      } else {
+        for (const outcome of trace.source_outcomes) {
+          const row = document.createElement("div");
+          row.className = "source-row";
+          const name = document.createElement("strong");
+          name.textContent = pretty(outcome.source_name);
+          const state = document.createElement("span");
+          state.textContent = `${pretty(outcome.status)} · ${pretty(outcome.provenance)}`;
+          row.append(name, state);
+          sources.append(row);
+        }
+      }
+    }
+
+    function eventDescription(event) {
+      const tool = event.tool_name ? pretty(event.tool_name) : "";
+      return [event.message || "", tool ? `Tool: ${tool}` : ""].filter(Boolean).join(" · ");
+    }
+
+    function parseSSEBlock(block) {
+      let eventName = "message";
+      const dataLines = [];
+      for (const line of block.split(/\r?\n/)) {
+        if (line.startsWith("event:")) eventName = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+      }
+      if (!dataLines.length) return null;
+      try { return { eventName, data: JSON.parse(dataLines.join("\n")) }; }
+      catch { return null; }
+    }
+
+    async function consumeStream(response) {
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || `Request failed (${response.status}).`);
+      }
+      if (!response.body) throw new Error("This browser does not support response streaming.");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        let boundary;
+        while ((boundary = buffer.search(/\r?\n\r?\n/)) !== -1) {
+          const block = buffer.slice(0, boundary);
+          const separator = buffer.slice(boundary).match(/^\r?\n\r?\n/)[0];
+          buffer = buffer.slice(boundary + separator.length);
+          const parsed = parseSSEBlock(block);
+          if (!parsed) continue;
+          const { eventName, data } = parsed;
+          if (eventName === "investigation_result") {
+            renderScorecard(data);
+            addActivity("Investigation result received", `Status: ${pretty(data.status)}${data.error_code ? ` · ${data.error_code}` : ""}`);
+            return data;
+          } else if (eventName === "error") {
+            addActivity("Investigation could not continue", data.message || data.error_code || "An investigation error occurred.");
+          } else {
+            addActivity(pretty(eventName), eventDescription(data));
+          }
+        }
+        if (done) break;
+      }
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const userText = $("userText").value.trim();
+      const identifier = $("identifier").value.trim();
+      if (!userText && !identifier) {
+        statusEl.textContent = "Enter a message or a PayPal Sandbox ID first.";
+        statusEl.className = "status error";
+        return;
+      }
+
+      activeController?.abort();
+      activeController = new AbortController();
+      $("results").classList.remove("hidden");
+      $("timeline").replaceChildren();
+      $("findings").textContent = "Investigation in progress…";
+      $("sources").textContent = "Waiting for source checks…";
+      $("summary").textContent = "The agent is gathering evidence.";
+      $("riskScore").textContent = "…";
+      $("recommendation").textContent = "";
+      statusEl.textContent = "Connecting to ScamAirbag API…";
+      statusEl.className = "status";
+      setBusy(true);
+
+      const payload = {
+        user_text: userText || null,
+        identifier: identifier || null,
+        identifier_hint: $("identifierHint").value,
+        share_anonymized_intelligence: $("shareIntelligence").checked
+      };
+      if (identifier && payload.identifier_hint === "UNKNOWN") {
+        statusEl.textContent = "Choose whether the PayPal ID is an invoice, order, or subscription.";
+        statusEl.className = "status error";
+        setBusy(false);
+        return;
+      }
+
+      try {
+        const base = $("apiBase").value.trim().replace(/\/+$/, "");
+        const response = await fetch(`${base}/api/v1/investigate/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+          body: JSON.stringify(payload),
+          signal: activeController.signal
+        });
+        const result = await consumeStream(response);
+        if (result?.status === "COMPLETED") {
+          statusEl.textContent = "Investigation completed.";
+        } else if (result?.status === "PARTIAL") {
+          statusEl.textContent = `Investigation incomplete (${result.error_code || "partial evidence"}). Verify manually.`;
+          statusEl.className = "status error";
+        } else {
+          statusEl.textContent = `Investigation failed (${result?.error_code || "unknown error"}). The displayed scorecard is limited and should not be treated as a completed investigation.`;
+          statusEl.className = "status error";
+        }
+      } catch (error) {
+        if (error.name === "AbortError") statusEl.textContent = "Request cancelled.";
+        else {
+          statusEl.textContent = error.message || "Unable to reach the API.";
+          statusEl.className = "status error";
+          addActivity("Investigation error", statusEl.textContent);
+        }
+      } finally {
+        setBusy(false);
+      }
+    });
+
+    $("clearButton").addEventListener("click", () => {
+      activeController?.abort();
+      form.reset();
+      $("identifierHint").value = "UNKNOWN";
+      $("shareIntelligence").checked = false;
+      if (window.findingsGridApi) { window.findingsGridApi.destroy(); window.findingsGridApi = null; }
+      $("timeline").replaceChildren();
+      $("findings").textContent = "No findings yet.";
+      $("sources").textContent = "Waiting for source checks.";
+      $("results").classList.add("hidden");
+      statusEl.textContent = "Ready when you are.";
+      statusEl.className = "status";
+    });
+  </script>
+</body>
+</html>
