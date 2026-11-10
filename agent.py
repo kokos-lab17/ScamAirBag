@@ -30,6 +30,7 @@ import logging
 import os
 import re
 import time
+import threading
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from schemas import (
@@ -614,6 +615,7 @@ def _build_prompt(
 def run_investigation(
     request: InvestigationInput,
     event_callback: Optional[Callable[[InvestigationEvent], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> InvestigationTrace:
     """
     Run a bounded Gemini-driven tool-selection loop and deterministic scoring.
@@ -635,6 +637,14 @@ def run_investigation(
         InvestigationEventType.INVESTIGATION_STARTED,
         "Investigation started.",
     )
+
+    if cancel_event is not None and cancel_event.is_set():
+        trace.status = "PARTIAL"
+        trace.error_code = "CLIENT_DISCONNECTED"
+        scorecard, outcomes = score_investigation(input_context, extracted, results)
+        trace.source_outcomes = outcomes
+        trace.final_scorecard = scorecard
+        return trace
 
     if input_context.email_headers and input_context.email_headers.strip():
         header_result = run_tool("email_authentication_headers", {"email_headers": input_context.email_headers})
@@ -769,6 +779,10 @@ def run_investigation(
         ]
 
         for model_turn in range(MAX_MODEL_TURNS):
+            if cancel_event is not None and cancel_event.is_set():
+                trace.error_code = "CLIENT_DISCONNECTED"
+                feedback = "The client disconnected; stop after the current provider call."
+                break
             if time.monotonic() - started_at >= MAX_INVESTIGATION_SECONDS:
                 trace.error_code = "AGENT_TIME_BUDGET_EXCEEDED"
                 feedback = "The investigation time budget is exhausted. Finish with the evidence collected and clearly state what remains unverified."
@@ -821,6 +835,10 @@ def run_investigation(
                     contents=contents,
                     config=config,
                 )
+
+            if cancel_event is not None and cancel_event.is_set():
+                trace.error_code = "CLIENT_DISCONNECTED"
+                break
 
             candidate = (
                 response.candidates[0]
@@ -957,6 +975,10 @@ def run_investigation(
                         ),
                         result=None,
                     ))
+                    break
+
+                if cancel_event is not None and cancel_event.is_set():
+                    trace.error_code = "CLIENT_DISCONNECTED"
                     break
 
                 tool_name = decision.selected_tool
