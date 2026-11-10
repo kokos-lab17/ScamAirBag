@@ -431,11 +431,11 @@ def test_lookalike_domain_detector_does_not_flag_exact_canonical_domain():
 
 def test_email_authentication_header_parser_extracts_results_and_domains():
     result = tools.inspect_email_authentication_headers(
-        "From: Billing <alerts@paypal.com>\\n"
-        "Return-Path: <bounce@mailer.example>\\n"
+        "From: Billing <alerts@paypal.com>\n"
+        "Return-Path: <bounce@mailer.example>\n"
         "Authentication-Results: mx.example; spf=pass smtp.mailfrom=mailer.example; "
-        "dkim=pass header.d=paypal.com; dmarc=fail header.from=paypal.com\\n"
-        "DKIM-Signature: v=1; d=paypal.com; s=mail; b=abc\\n\\nBody ignored"
+        "dkim=pass header.d=paypal.com; dmarc=fail header.from=paypal.com\n"
+        "DKIM-Signature: v=1; d=paypal.com; s=mail; b=abc\n\nBody ignored"
     )
     assert result.status == "SUCCESS"
     assert result.data["from_domain"] == "paypal.com"
@@ -450,7 +450,7 @@ def test_email_authentication_header_parser_extracts_results_and_domains():
 
 def test_email_authentication_header_parser_does_not_treat_missing_auth_results_as_pass():
     result = tools.inspect_email_authentication_headers(
-        "From: User <user@example.com>\\nSubject: Test\\n"
+        "From: User <user@example.com>\nSubject: Test\n"
     )
     assert result.status == "SUCCESS"
     assert result.data["authentication_results"] == []
