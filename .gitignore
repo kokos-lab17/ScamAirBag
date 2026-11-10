@@ -4,3 +4,4 @@ __pycache__/
 .pytest_cache/
 *.py[cod]
 .DS_Store
+watchtower.sqlite3*
