@@ -153,3 +153,68 @@ def test_streaming_endpoint_emits_final_failed_status_without_raw_input(monkeypa
     assert "investigation_result" in response.text
     assert '"status":"FAILED"' in response.text
     assert "RAW_PRIVATE_TEXT_DO_NOT_ECHO" not in response.text
+
+
+def test_link_extraction_detects_malformed_paypal_link():
+    result = tools._extract_link_evidence("PayPal link:123hduyen23unfhjc")
+    assert result["detected_urls"] == []
+    assert result["malformed_urls"] == ["123hduyen23unfhjc"]
+    assert result["detected_domains"] == []
+    assert "PayPal link:123hduyen23unfhjc" in result["link_context"][0]
+
+
+def test_link_extraction_detects_complete_url_and_domain():
+    result = tools._extract_link_evidence(
+        "Please pay here: https://payments.example.com/invoice/123"
+    )
+    assert result["detected_urls"] == ["https://payments.example.com/invoice/123"]
+    assert result["detected_domains"] == ["payments.example.com"]
+    assert result["malformed_urls"] == []
+
+
+def test_duplicate_payment_tactic_is_counted_once():
+    from scoring import _build_findings
+    entities = ExtractedEntities(
+        coercion_tactics=["friends_and_family_diversion"],
+        unusual_payment_instructions=["friends_and_family_diversion"],
+        raw_evidence_quotes=["use family account"],
+    )
+    findings, _ = _build_findings(entities, [])
+    overlap = [f for f in findings if "friends and family diversion" in f.description]
+    assert len(overlap) == 1
+    assert overlap[0].rule_id == "UNUSUAL_PAYMENT_INSTRUCTION"
+    assert sum(f.risk_impact for f in overlap) == 25
+
+
+def test_malformed_link_adds_info_finding_not_risk_points():
+    from scoring import _build_findings
+    entities = ExtractedEntities(malformed_urls=["123hduyen23unfhjc"])
+    findings, _ = _build_findings(entities, [])
+    malformed = [f for f in findings if f.rule_id == "MALFORMED_OR_INCOMPLETE_LINK"]
+    assert len(malformed) == 1
+    assert malformed[0].risk_impact == 0
+    assert malformed[0].severity.value == "INFO"
+
+
+def test_gemini_extraction_falls_back_after_transient_primary_error(monkeypatch):
+    calls = []
+
+    class FakeModels:
+        def generate_content(self, *, model, contents, config):
+            calls.append(model)
+            if model == "primary-test":
+                error = RuntimeError("temporary unavailable")
+                error.code = 503
+                raise error
+            return {"ok": True}
+
+    class FakeClient:
+        models = FakeModels()
+
+    monkeypatch.setattr(tools, "GEMINI_MODEL", "primary-test")
+    monkeypatch.setattr(tools, "GEMINI_FALLBACK_MODEL", "fallback-test")
+    result = tools._generate_with_model_fallback(
+        FakeClient(), contents="test", config=None
+    )
+    assert result == {"ok": True}
+    assert calls == ["primary-test", "fallback-test"]

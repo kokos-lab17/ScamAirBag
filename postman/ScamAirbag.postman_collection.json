@@ -1,56 +1,216 @@
 {
   "info": {
-    "name": "ScamAirbag API",
-    "description": "Health, validated investigation, and streaming investigation requests. Use your own PayPal Sandbox IDs and never store secrets in this collection.",
+    "_postman_id": "70066385-8300-5058-9b1f-9bd975f4d6cb",
+    "name": "ScamAirbag \u2014 API & Regression Checks",
+    "description": "Postman test suite for ScamAirbag health, validated investigation, streaming SSE, and request validation. Uses PayPal Sandbox only. Never store API secrets in this collection.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:8000" },
-    { "key": "invoiceId", "value": "REPLACE_WITH_YOUR_SANDBOX_INVOICE_ID" }
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "invoiceId",
+      "value": "REPLACE_WITH_PAYPAL_SANDBOX_INVOICE_ID"
+    },
+    {
+      "key": "invalidIdentifierHint",
+      "value": "NOT_A_REAL_HINT"
+    }
   ],
   "item": [
     {
-      "name": "Health",
-      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/health" }
+      "name": "01 \u2014 Health & readiness",
+      "item": [
+        {
+          "name": "Health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Health returns HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Health response is JSON', () => pm.response.to.be.json);",
+                  "const body = pm.response.json();",
+                  "pm.test('Health response reports healthy status', () => pm.expect(body.status || body.health || '').to.be.oneOf(['ok','healthy','OK','HEALTHY']));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health"
+          }
+        }
+      ]
     },
     {
-      "name": "Investigate suspicious message",
-      "request": {
-        "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"user_text\": \"A seller sent me an invoice and says I must pay immediately.\",\n  \"identifier\": null,\n  \"identifier_hint\": \"UNKNOWN\",\n  \"share_anonymized_intelligence\": false\n}"
+      "name": "02 \u2014 Investigation endpoints",
+      "item": [
+        {
+          "name": "Investigate message (JSON)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Investigation returns HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response is JSON', () => pm.response.to.be.json);",
+                  "const body = pm.response.json();",
+                  "pm.test('Trace includes a status', () => pm.expect(body.status).to.be.a('string'));",
+                  "pm.test('Trace includes scorecard when completed', () => { if (body.status === 'COMPLETED') pm.expect(body.final_scorecard).to.be.an('object'); });",
+                  "pm.test('Score is within 0\u2013100', () => { const score = body.final_scorecard?.risk_score; if (score !== undefined) pm.expect(score).to.be.within(0,100); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_text\": \"Urgently pay this invoice today or your account will be suspended. Use Friends and Family and share the OTP to confirm.\",\n  \"identifier\": null,\n  \"identifier_hint\": \"UNKNOWN\",\n  \"share_anonymized_intelligence\": false\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/investigate"
+          }
         },
-        "url": "{{baseUrl}}/api/v1/investigate"
-      }
+        {
+          "name": "Investigate PayPal Sandbox invoice",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Invoice investigation returns HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response is JSON', () => pm.response.to.be.json);",
+                  "const body = pm.response.json();",
+                  "pm.test('A scorecard is returned when completed', () => { if (body.status === 'COMPLETED') pm.expect(body.final_scorecard).to.be.an('object'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_text\": \"Please independently verify this PayPal Sandbox invoice.\",\n  \"identifier\": \"{{invoiceId}}\",\n  \"identifier_hint\": \"INVOICE\",\n  \"share_anonymized_intelligence\": false\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/investigate"
+          }
+        },
+        {
+          "name": "Stream investigation (SSE)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('SSE request returns HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response content type is event-stream', () => pm.expect(pm.response.headers.get('Content-Type') || '').to.include('text/event-stream'));",
+                  "pm.test('Stream contains investigation lifecycle events', () => { const body = pm.response.text(); pm.expect(body).to.include('event: investigation_started'); pm.expect(body).to.include('event: investigation_result'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_text\": \"Please investigate this payment request and identify evidence that can be independently checked.\",\n  \"identifier\": null,\n  \"identifier_hint\": \"UNKNOWN\",\n  \"share_anonymized_intelligence\": false\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/investigate/stream"
+          }
+        }
+      ]
     },
     {
-      "name": "Investigate PayPal Sandbox invoice",
-      "request": {
-        "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"user_text\": \"Please verify this invoice.\",\n  \"identifier\": \"{{invoiceId}}\",\n  \"identifier_hint\": \"INVOICE\",\n  \"share_anonymized_intelligence\": false\n}"
+      "name": "03 \u2014 Validation & safety",
+      "item": [
+        {
+          "name": "Reject invalid identifier hint",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Invalid hint is rejected with HTTP 422', () => pm.response.to.have.status(422));",
+                  "pm.test('Validation response explains the invalid field', () => pm.expect(pm.response.text().toLowerCase()).to.include('identifier_hint'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_text\": \"Check this request.\",\n  \"identifier\": null,\n  \"identifier_hint\": \"{{invalidIdentifierHint}}\",\n  \"share_anonymized_intelligence\": false\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/investigate"
+          }
         },
-        "url": "{{baseUrl}}/api/v1/investigate"
-      }
-    },
-    {
-      "name": "Stream investigation (SSE)",
-      "request": {
-        "method": "POST",
-        "header": [
-          { "key": "Content-Type", "value": "application/json" },
-          { "key": "Accept", "value": "text/event-stream" }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"user_text\": \"Please investigate this payment request.\",\n  \"identifier\": null,\n  \"identifier_hint\": \"UNKNOWN\",\n  \"share_anonymized_intelligence\": false\n}"
-        },
-        "url": "{{baseUrl}}/api/v1/investigate/stream"
-      }
+        {
+          "name": "Reject empty investigation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Empty request is rejected with HTTP 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_text\": \"   \",\n  \"identifier\": null,\n  \"identifier_hint\": \"UNKNOWN\"\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/investigate"
+          }
+        }
+      ]
     }
   ]
 }

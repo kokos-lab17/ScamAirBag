@@ -1,21 +1,32 @@
-# APIMatic Context Plugin (developer workflow)
+# APIMatic PayPal Context Plugin
 
-APIMatic's hackathon resource describes its PayPal Context Plugin as a tool for
-AI coding assistants. It supplies PayPal API context while a developer builds
-an integration; it is **not a runtime dependency of ScamAirbag**.
+## Role in ScamAirbag
 
-To use it during future PayPal API changes:
+APIMatic's PayPal Context Plugin is a **developer-time integration assistant**, not a library or service called by ScamAirbag at runtime. It gives the coding agent current PayPal API endpoint, authentication, model, error-handling, resilience, and testing context.
 
-1. Open the APIMatic Context Plugin resource linked from the PayPal AI Hackathon
-   APIMatic sponsor page.
-2. Follow APIMatic's current setup instructions for your supported coding agent.
-3. Ask the coding agent to inspect the PayPal Invoice, Orders, and Subscriptions
-   contracts before changing `tools.py`.
-4. Verify every generated field mapping against a real PayPal Sandbox response
-   and the official PayPal API reference.
-5. Record which endpoints and contract details were consulted in the project
-   development notes.
+## Install in the development environment
 
-Do not claim APIMatic was used unless the Context Plugin was actually connected
-and used during development. This repository includes this guide as a setup
-note, not as evidence that the plugin has already been used.
+Prerequisite: Node.js 18+. In the VS Code terminal opened at the ScamAirbag repository, run:
+
+```bash
+npx context-plugins install paypal
+```
+
+The installer detects supported coding assistants and installs the PayPal context plugin. Follow its prompts and confirm the plugin is enabled in the coding assistant. Official listing: https://context.apimatic.io/plugins/paypal/
+
+## Use it for this project
+
+Ask the coding agent to inspect the current PayPal integration before editing it. Focus on:
+
+1. OAuth client-credentials authentication and sandbox/live base URL separation.
+2. Invoice retrieval response fields used by `tool_paypal_invoice`.
+3. Order retrieval response fields used by `tool_paypal_order`.
+4. Subscription retrieval response fields used by `tool_paypal_subscription`.
+5. Error mapping, timeouts, retries, and safe logging.
+6. Contract tests using PayPal Sandbox responses.
+
+Require the coding agent to cite the plugin-provided endpoint/model context in its explanation and to preserve ScamAirbag's existing `ToolExecutionResult` contract. Verify changes with the Postman collection and local regression tests. Never move PayPal client secrets into frontend code or Postman shared values.
+
+## Accurate sponsor claim
+
+Do not claim APIMatic was integrated into the running application. It is used to ground the development of ScamAirbag's PayPal API integration. Only claim it was used after the plugin has actually been installed and consulted during development.

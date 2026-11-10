@@ -80,7 +80,19 @@ class ExtractedEntities(BaseModel):
     claimed_recipient_name: Optional[str] = Field(default=None, description="Payment recipient name claimed in text")
     extracted_identifier: Optional[str] = Field(default=None, description="Discovered invoice, order, or sub ID")
     identifier_hint: Optional[str] = Field(default=None, description="Inferred ID type: 'INVOICE', 'ORDER', etc.")
+    detected_urls: List[str] = Field(
+        default_factory=list,
+        description="Complete URL strings explicitly present in the submitted message",
+    )
+    malformed_urls: List[str] = Field(
+        default_factory=list,
+        description="Incomplete or malformed link-like strings explicitly present in the message",
+    )
     detected_domains: List[str] = Field(default_factory=list, description="All external web domains mentioned")
+    link_context: List[str] = Field(
+        default_factory=list,
+        description="Short surrounding text explaining or referring to each detected link",
+    )
     urgency_score: int = Field(default=1, ge=1, le=10, description="1 (relaxed) to 10 (panic/extreme pressure)")
     coercion_tactics: List[str] = Field(
         default_factory=list,

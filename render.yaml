@@ -10,13 +10,17 @@ services:
       - key: PYTHON_VERSION
         value: 3.12.8
       - key: CORS_ORIGINS
-        value: https://scamairbag-web.onrender.com
+        value: https://scamairbag-web-sqh8.onrender.com
       - key: PAYPAL_BASE_URL
         value: https://api-m.sandbox.paypal.com
       - key: ELASTIC_STORE_CASES
         value: "false"
       - key: GEMINI_API_KEY
         sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.1-flash-lite
+      - key: GEMINI_FALLBACK_MODEL
+        value: gemini-3.1-flash-lite
       - key: PAYPAL_CLIENT_ID
         sync: false
       - key: PAYPAL_CLIENT_SECRET
@@ -25,6 +29,12 @@ services:
         sync: false
       - key: ELASTIC_API_KEY
         sync: false
+      - key: ELASTIC_INDEX
+        value: scamairbag-investigations
+      - key: ELASTIC_TIMEOUT_SECONDS
+        value: "5"
+      - key: ELASTIC_STORE_CASES
+        value: "false"
       - key: RENDER_API_KEY
         sync: false
       - key: RENDER_INDEX_TASK_SLUG

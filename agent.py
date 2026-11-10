@@ -43,12 +43,14 @@ from schemas import (
     ToolExecutionResult,
 )
 from scoring import score_investigation
+from evidence_utils import explicit_message_identifier
 from tools import run_tool
 from elastic_intelligence import elastic_is_configured, store_opt_in_case
+from threat_intelligence import virustotal_is_configured
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash")
 MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "12"))
 MAX_MODEL_TURNS = int(os.getenv("MAX_MODEL_TURNS", "24"))
@@ -62,6 +64,7 @@ TOOL_ARGUMENTS = {
     "paypal_subscription": {"subscription_id"},
     "domain_intelligence": {"domain_or_url"},
     "historical_pattern_search": {"domain_or_url"},
+    "threat_intelligence": {"domain_or_url"},
 }
 
 TOOL_DESCRIPTIONS = {
@@ -90,6 +93,10 @@ TOOL_DESCRIPTIONS = {
         "Search Elastic for prior user-consented, minimized investigation records "
         "containing this exact domain. Treat matches as context, never proof."
     ),
+    "threat_intelligence": (
+        "Retrieve an existing VirusTotal domain reputation report. Send only the hostname, "
+        "never URL paths or query parameters. A missing report is unknown, not safe."
+    ),
 }
 
 SYSTEM_INSTRUCTIONS = """
@@ -108,8 +115,8 @@ INVESTIGATION:
 - If user_text exists, extract its context before relying on claims in it.
 - If the request has a recognized identifier_hint and identifier, perform the
   matching PayPal lookup unless it has already been attempted.
-- If message extraction found domains, use domain intelligence and, when configured,
-  historical_pattern_search for relevant domains. Do not repeat the same domain/input.
+- If message extraction found domains, use domain intelligence, VirusTotal when configured,
+  and Elastic historical search when configured. Do not repeat the same domain/input.
 - Historical matches are contextual only and must never be treated as proof of fraud.
 - Use tool results to decide whether another check adds material evidence.
 - A failed lookup is uncertainty, not proof of fraud.
@@ -244,6 +251,7 @@ def _parse_decision(arguments: Any) -> AgentDecision:
             "paypal_subscription": "subscription_id",
             "domain_intelligence": "domain_or_url",
             "historical_pattern_search": "domain_or_url",
+            "threat_intelligence": "domain_or_url",
         }[decision.selected_tool]
         if not decision.arguments.get(required):
             raise ValueError(f"Missing required argument: {required}")
@@ -304,6 +312,11 @@ def _tool_evidence_for_model(result: ToolExecutionResult) -> Dict[str, Any]:
         )}
     elif result.tool_name == "historical_pattern_search":
         safe = {key: data.get(key) for key in ("domain", "match_count", "cases")}
+    elif result.tool_name == "threat_intelligence":
+        safe = {key: data.get(key) for key in (
+            "domain", "record_found", "source", "reputation",
+            "last_analysis_stats", "last_analysis_date", "analysis_engines_reporting", "categories"
+        )}
     elif result.tool_name == "extract_message_context":
         safe = {"entities": data.get("entities")}
     else:
@@ -322,6 +335,16 @@ def _safe_event_summary(result: ToolExecutionResult) -> Dict[str, Any]:
         summary = {key: data.get(key) for key in ("domain", "dns_status", "whois_status", "domain_age_days")}
     elif result.tool_name == "historical_pattern_search":
         summary = {key: data.get(key) for key in ("domain", "match_count")}
+    elif result.tool_name == "threat_intelligence":
+        stats = data.get("last_analysis_stats") or {}
+        summary = {
+            "domain": data.get("domain"),
+            "source": data.get("source"),
+            "record_found": data.get("record_found"),
+            "malicious_detections": stats.get("malicious", 0),
+            "suspicious_detections": stats.get("suspicious", 0),
+            "analysis_engines_reporting": data.get("analysis_engines_reporting"),
+        }
     elif result.tool_name == "extract_message_context":
         entities = data.get("entities") or {}
         summary = {
@@ -354,7 +377,7 @@ def _required_checks_remaining(
     attempted = {item.tool_name for item in results}
     attempted_domain_inputs = set()
     for step in steps:
-        if step.decision.selected_tool in {"domain_intelligence", "historical_pattern_search"}:
+        if step.decision.selected_tool in {"domain_intelligence", "historical_pattern_search", "threat_intelligence"}:
             raw = step.decision.arguments.get("domain_or_url")
             if raw:
                 attempted_domain_inputs.add((step.decision.selected_tool, _domain_input_key(str(raw))))
@@ -373,7 +396,12 @@ def _required_checks_remaining(
     }
     candidate_identifier = input_context.identifier
     candidate_hint = hint
-    if not candidate_identifier and extracted and extracted.extracted_identifier:
+    if (not candidate_identifier and extracted and extracted.extracted_identifier
+            and explicit_message_identifier(
+                input_context.user_text,
+                extracted.extracted_identifier,
+                extracted.identifier_hint,
+            )):
         candidate_identifier = extracted.extracted_identifier
         candidate_hint = (extracted.identifier_hint or "UNKNOWN").strip().upper()
     if candidate_identifier and candidate_hint in mapping:
@@ -387,7 +415,11 @@ def _required_checks_remaining(
             key = _domain_input_key(str(domain))
             if ("domain_intelligence", key) not in attempted_domain_inputs:
                 remaining.append(("domain_intelligence", {"domain_or_url": domain},
-                                  "A domain from the supplied message has not been checked."))
+                                  "DNS and WHOIS evidence has not been checked for this domain."))
+                break
+            if virustotal_is_configured() and ("threat_intelligence", key) not in attempted_domain_inputs:
+                remaining.append(("threat_intelligence", {"domain_or_url": domain},
+                                  "External reputation evidence has not been checked for this domain."))
                 break
             if elastic_is_configured() and ("historical_pattern_search", key) not in attempted_domain_inputs:
                 remaining.append(("historical_pattern_search", {"domain_or_url": domain},
@@ -415,7 +447,7 @@ def _build_prompt(
                 "tool": step.decision.selected_tool,
                 "rationale": step.decision.rationale,
                 "result_status": step.result.status if step.result else None,
-                "domain_input": step.decision.arguments.get("domain_or_url") if step.decision.selected_tool in {"domain_intelligence", "historical_pattern_search"} else None,
+                "domain_input": step.decision.arguments.get("domain_or_url") if step.decision.selected_tool in {"domain_intelligence", "historical_pattern_search", "threat_intelligence"} else None,
             }
             for step in steps[-6:]
         ],
@@ -550,12 +582,13 @@ def run_investigation(
                 except (TypeError, ValueError):
                     status_code = None
 
-                if status_code not in {503, 504} or active_model == GEMINI_FALLBACK_MODEL:
+                if status_code not in {500, 502, 503, 504} or active_model == GEMINI_FALLBACK_MODEL:
                     raise
 
                 logger.warning(
-                    "Primary Gemini model %s returned HTTP 503; switching to %s.",
+                    "Primary Gemini model %s returned HTTP %s; switching to %s.",
                     active_model,
+                    status_code,
                     GEMINI_FALLBACK_MODEL,
                 )
                 active_model = GEMINI_FALLBACK_MODEL
@@ -640,6 +673,37 @@ def run_investigation(
                     break
 
             if decision.action == "CALL_TOOL":
+                # A model decision cannot turn an arbitrary message fragment into
+                # a PayPal transaction ID. Explicit UI-supplied IDs are accepted;
+                # message-derived IDs must appear after a matching type label.
+                paypal_hints = {
+                    "paypal_invoice": ("invoice_id", "INVOICE"),
+                    "paypal_order": ("order_id", "ORDER"),
+                    "paypal_subscription": ("subscription_id", "SUBSCRIPTION"),
+                }
+                if decision.selected_tool in paypal_hints:
+                    argument_name, expected_hint = paypal_hints[decision.selected_tool]
+                    candidate = str(decision.arguments.get(argument_name) or "").strip()
+                    supplied_directly = bool(
+                        input_context.identifier
+                        and input_context.identifier.strip().casefold() == candidate.casefold()
+                        and (input_context.identifier_hint or "UNKNOWN").strip().upper() == expected_hint
+                    )
+                    extracted_explicitly = explicit_message_identifier(
+                        input_context.user_text, candidate, expected_hint
+                    )
+                    if not (supplied_directly or extracted_explicitly):
+                        contents.append(_function_response(types, {
+                            "accepted": False,
+                            "error": "PayPal lookup rejected: the identifier was not explicitly supplied or labelled in the message.",
+                        }, call.id))
+                        feedback = (
+                            "Do not call a PayPal lookup for this candidate. It is not an explicitly supplied "
+                            "transaction identifier. Preserve any malformed link as unverified evidence and "
+                            "continue with other applicable checks or finish."
+                        )
+                        continue
+
                 if len(results) >= MAX_TOOL_CALLS:
                     trace.steps.append(InvestigationStep(
                         step_number=len(trace.steps) + 1,
@@ -667,7 +731,7 @@ def run_investigation(
                     result=result,
                 ))
 
-                if tool_name == "extract_message_context" and result.status == "SUCCESS":
+                if tool_name == "extract_message_context" and result.status in {"SUCCESS", "PARTIAL"}:
                     raw_entities = result.data.get("entities")
                     if isinstance(raw_entities, dict):
                         try:
