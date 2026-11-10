@@ -114,3 +114,23 @@ def test_watchtower_includes_recurring_subscription_lifecycle_events():
     }
     assert expected.issubset(watchtower.PAYPAL_EVENT_HINTS)
     assert all(watchtower.PAYPAL_EVENT_HINTS[name] == "SUBSCRIPTION" for name in expected)
+
+
+def test_watchtower_purges_events_outside_retention_window(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    watchtower._create_event("expired-event", "TEST", "INVOICE", "INV-OLD", "INVOICE")
+    with watchtower._db() as db:
+        db.execute(
+            "UPDATE watchtower_events SET received_at=? WHERE event_id=?",
+            ("2000-01-01T00:00:00+00:00", "expired-event"),
+        )
+    watchtower._create_event("fresh-event", "TEST", "INVOICE", "INV-NEW", "INVOICE")
+    with watchtower._db() as db:
+        expired = db.execute(
+            "SELECT event_id FROM watchtower_events WHERE event_id='expired-event'"
+        ).fetchone()
+        fresh = db.execute(
+            "SELECT event_id FROM watchtower_events WHERE event_id='fresh-event'"
+        ).fetchone()
+    assert expired is None
+    assert fresh is not None
