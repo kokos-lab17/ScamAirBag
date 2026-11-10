@@ -60,7 +60,10 @@
   <main class="shell">
     <header class="topbar">
       <div class="brand"><div class="logo">A</div><div><h1>ScamAirbag</h1><div class="subtitle">Pre-payment investigation workspace</div></div></div>
-      <div class="api"><label for="apiBase">API endpoint</label><input id="apiBase" aria-label="API base URL"></div>
+      <div class="api">
+        <label for="apiBase">API endpoint</label><input id="apiBase" aria-label="API base URL">
+        <label for="apiAccessToken">Service token</label><input id="apiAccessToken" type="password" autocomplete="off" aria-label="ScamAirbag service access token" placeholder="Service token">
+      </div>
     </header>
 
     <nav class="nav" aria-label="Page sections">
@@ -71,7 +74,7 @@
     <section id="watchtower" class="panel" style="margin-bottom:18px">
       <div class="panel-head"><h2 class="section-title">Airbag Watchtower</h2><span id="watchtowerState" class="eyebrow">Checking listener…</span></div>
       <p id="watchtowerNote" class="hint">Event-driven monitoring workspace. Live PayPal monitoring is not claimed until a verified event source is connected.</p>
-      <div class="field"><label for="watchtowerToken">Watchtower access token</label><input id="watchtowerToken" type="password" autocomplete="off" placeholder="Enter the API service's WATCHTOWER_INGEST_TOKEN"><div class="hint">Required to view private event history and trigger demo investigations. Kept in this page only; do not share it.</div></div>
+      <div class="hint">The service token is used for protected investigation and Watchtower actions. It is held only in this page session; do not share it.</div>
       <div class="input-grid">
         <div class="field"><label for="watchtowerInvoice">PayPal Sandbox invoice ID</label><input id="watchtowerInvoice" maxlength="200" placeholder="Enter an existing Sandbox invoice ID"></div>
         <div class="field" style="display:flex;align-items:end"><button id="simulateInvoiceButton" class="btn" type="button" disabled>Simulate incoming invoice event</button></div>
@@ -122,6 +125,20 @@
         <section id="coverage" class="panel"><div class="panel-head"><h2 class="section-title">Evidence checks</h2><span class="eyebrow">Source coverage</span></div><div id="sources" class="source-list"><div class="status">Waiting for source checks.</div></div></section>
         <section id="activity" class="panel"><div class="panel-head"><h2 class="section-title">Investigation activity</h2><span class="eyebrow">Progress log</span></div><div id="timeline" class="timeline"><div class="status">Waiting for agent activity.</div></div></section>
       </div>
+      <section id="evidenceReceipt" class="panel">
+        <div class="panel-head"><h2 class="section-title">Evidence receipt</h2><span class="eyebrow">Integrity manifest</span></div>
+        <div class="detail">
+          <div class="detail-label">Manifest SHA-256 root</div>
+          <div id="evidenceRootHash" class="detail-text">Waiting for completed evidence.</div>
+        </div>
+        <div id="evidenceCounts" class="hint">No evidence manifest available.</div>
+        <p id="evidenceIntegrityNote" class="hint">The evidence receipt will explain exactly what its hashes prove and what they do not.</p>
+        <div class="actions">
+          <button id="verifyEvidenceButton" class="btn secondary" type="button" disabled>Verify receipt integrity</button>
+          <button id="downloadEvidenceButton" class="btn secondary" type="button" disabled>Export evidence JSON</button>
+          <span id="evidenceVerifyStatus" class="status" role="status">No receipt loaded.</span>
+        </div>
+      </section>
     </section>
     <p class="notice">ScamAirbag provides evidence-based risk indicators, not a guarantee that a payment is safe or fraudulent. Verify through official PayPal channels before paying.</p>
   </main>
@@ -287,6 +304,23 @@
           const state = document.createElement("span"); state.className = "source-state"; state.textContent = pretty(item.status);
           row.append(name, state); host.append(row);
         }
+        const paypalEvidence = Array.isArray(trace.paypal_evidence) ? trace.paypal_evidence : [];
+        for (const item of paypalEvidence) {
+          const card = document.createElement("div"); card.className = "detail";
+          const heading = document.createElement("div"); heading.className = "detail-title";
+          heading.textContent = `Verified PayPal record · ${pretty(item.tool_name)} · ${pretty(item.status)}`;
+          card.append(heading);
+          const grid = document.createElement("div"); grid.className = "detail-grid";
+          for (const [key, value] of Object.entries(item.evidence || {})) {
+            if (value === null || value === undefined || value === "") continue;
+            const block = document.createElement("div"); block.className = "detail-block";
+            const label = document.createElement("div"); label.className = "detail-label"; label.textContent = pretty(key);
+            const detail = document.createElement("div"); detail.className = "detail-text";
+            detail.textContent = typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
+            block.append(label, detail); grid.append(block);
+          }
+          card.append(grid); host.append(card);
+        }
         const domainEvidence = Array.isArray(trace.domain_evidence) ? trace.domain_evidence : [];
         for (const item of domainEvidence) {
           const card = document.createElement("div"); card.className = "detail";
@@ -304,6 +338,22 @@
           }
           card.append(grid); host.append(card);
         }
+      }
+
+      let currentEvidenceManifest = null;
+
+      function renderEvidenceManifest(trace) {
+        const manifest = trace?.evidence_manifest;
+        currentEvidenceManifest = manifest && typeof manifest === "object" ? manifest : null;
+        $("evidenceRootHash").textContent = currentEvidenceManifest?.root_sha256 || "No manifest returned.";
+        const evidenceCount = currentEvidenceManifest?.evidence_records?.length || 0;
+        const findingCount = currentEvidenceManifest?.findings?.length || 0;
+        const signatureLabel = currentEvidenceManifest?.signature ? "Server signature present" : "Unsigned manifest";
+        $("evidenceCounts").textContent = `${evidenceCount} evidence record(s) · ${findingCount} finding(s) · ${signatureLabel}`;
+        $("evidenceIntegrityNote").textContent = currentEvidenceManifest?.integrity_note || "The API did not return an evidence integrity note.";
+        $("verifyEvidenceButton").disabled = !currentEvidenceManifest;
+        $("downloadEvidenceButton").disabled = !currentEvidenceManifest;
+        $("evidenceVerifyStatus").textContent = currentEvidenceManifest ? "Receipt ready for integrity verification." : "No receipt loaded.";
       }
 
       function renderScorecard(trace) {
@@ -325,7 +375,7 @@
         $("verdictNote").textContent = trace.status === "COMPLETED"
           ? "Risk index is deterministic and explainable; it is not a probability or a guarantee. A low score does not prove legitimacy."
           : `This was a ${String(trace.status || "partial").toLowerCase()} investigation${trace.error_code ? ` (${trace.error_code})` : ""}. Do not treat it as a completed safety check.`;
-        renderFindings(scorecard); renderSources(trace);
+        renderFindings(scorecard); renderSources(trace); renderEvidenceManifest(trace);
       }
 
       function parseSSEBlock(block) {
@@ -382,6 +432,34 @@
           host.append(pending); return;
         }
         const trace = item.result; const score = trace.final_scorecard;
+        if (Array.isArray(trace.historical_correlations) && trace.historical_correlations.length) {
+          const correlationTitle = document.createElement("div"); correlationTitle.className = "detail-title";
+          correlationTitle.textContent = "Recurring-domain context"; host.append(correlationTitle);
+          for (const correlation of trace.historical_correlations) {
+            const block = document.createElement("div"); block.className = "detail";
+            const text = document.createElement("div"); text.className = "detail-text";
+            text.textContent = `${correlation.domain} appeared in ${correlation.prior_case_observations} prior Watchtower case(s). ${correlation.interpretation}`;
+            block.append(text); host.append(block);
+          }
+        }
+        if (trace.evidence_manifest?.root_sha256) {
+          const receipt = document.createElement("div"); receipt.className = "detail";
+          const title = document.createElement("div"); title.className = "detail-title"; title.textContent = "Evidence receipt";
+          const hash = document.createElement("div"); hash.className = "detail-text"; hash.textContent = `SHA-256 root: ${trace.evidence_manifest.root_sha256}`;
+          receipt.append(title, hash); host.append(receipt);
+        }
+        if (Array.isArray(trace.paypal_evidence) && trace.paypal_evidence.length) {
+          const paypalTitle = document.createElement("div"); paypalTitle.className = "detail-title";
+          paypalTitle.textContent = "Verified PayPal transaction and subscription evidence"; host.append(paypalTitle);
+          for (const item of trace.paypal_evidence) {
+            const block = document.createElement("div"); block.className = "detail";
+            const heading = document.createElement("div"); heading.className = "detail-title";
+            heading.textContent = `${pretty(item.tool_name)} · ${pretty(item.status)}`;
+            const data = document.createElement("div"); data.className = "detail-text";
+            data.textContent = JSON.stringify(item.evidence || {}, null, 2);
+            block.append(heading, data); host.append(block);
+          }
+        }
         if (score) {
           const verdict = document.createElement("div"); verdict.className = "recommendation";
           verdict.textContent = `Risk index ${score.risk_score}/100 · Coverage ${score.coverage_score}% · Confidence ${pretty(score.confidence_level)}`;
@@ -413,20 +491,33 @@
       async function refreshWatchtower() {
         const base = $("apiBase").value.trim().replace(/\/+$/, "");
         try {
-          const [statusResponse, eventsResponse] = await Promise.all([
-            fetch(`${base}/api/v1/watchtower/status`),
-            fetch(`${base}/api/v1/watchtower/events?limit=20`, { headers: { "X-Watchtower-Token": $("watchtowerToken").value.trim() } })
-          ]);
+          const token = $("apiAccessToken").value.trim();
+          const statusResponse = await fetch(`${base}/api/v1/watchtower/status`);
           if (!statusResponse.ok) throw new Error("Watchtower API unavailable");
           const status = await statusResponse.json();
+          // Do not call a protected endpoint without credentials. This avoids
+          // noisy 401s on every dashboard refresh while preserving server-side auth.
+          if (!token) {
+            $("watchtowerState").textContent = status.paypal_webhook_configured ? "PAYPAL WEBHOOK READY" : "LISTENER READY · WEBHOOK NOT CONFIGURED";
+            $("simulateInvoiceButton").disabled = true;
+            $("registerPaypalWebhook").disabled = true;
+            $("watchtowerNote").textContent = `${status.monitoring_claim} PayPal webhook ${status.paypal_webhook_configured ? "is configured" : "is not configured"} at ${status.paypal_webhook_path}.`;
+            $("watchtowerActionStatus").textContent = "Enter the Watchtower access token to load private event history.";
+            $("watchtowerEvents").textContent = "Event history is protected. Enter the access token above.";
+            $("watchtowerAlerts").textContent = "Alerts will appear here after authenticated event history loads.";
+            return;
+          }
+          const eventsResponse = await fetch(`${base}/api/v1/watchtower/events?limit=20`, {
+            headers: { "X-Watchtower-Token": token }
+          });
           $("watchtowerState").textContent = status.paypal_webhook_configured ? "PAYPAL WEBHOOK READY" : "LISTENER READY · WEBHOOK NOT CONFIGURED";
-          $("simulateInvoiceButton").disabled = !status.demo_enabled || !$("watchtowerToken").value.trim();
-          $("registerPaypalWebhook").disabled = !status.public_api_url_configured || !$("watchtowerToken").value.trim() || status.paypal_webhook_configured;
+          $("simulateInvoiceButton").disabled = !status.demo_enabled || !$("apiAccessToken").value.trim();
+          $("registerPaypalWebhook").disabled = !status.public_api_url_configured || !$("apiAccessToken").value.trim() || status.paypal_webhook_configured;
           $("watchtowerNote").textContent = `${status.monitoring_claim} PayPal webhook ${status.paypal_webhook_configured ? "is configured" : "is not configured"} at ${status.paypal_webhook_path}.`;
           const alertsHost = $("watchtowerAlerts"); alertsHost.replaceChildren();
           if (eventsResponse.status === 401) {
-            $("watchtowerActionStatus").textContent = "Enter the Watchtower access token to view private event history.";
-            $("watchtowerEvents").textContent = "Event history is protected. Enter the access token above.";
+            $("watchtowerActionStatus").textContent = "Access token rejected. Check that it exactly matches WATCHTOWER_INGEST_TOKEN on the API service.";
+            $("watchtowerEvents").textContent = "Private event history is protected because the supplied token was rejected.";
             alertsHost.textContent = "Alerts will appear here after authenticated event history loads.";
             return;
           }
@@ -470,7 +561,7 @@
               try {
 
                 const base = $("apiBase").value.trim().replace(/\/+$/, "");   
-                const response = await fetch(`${base}/api/v1/watchtower/events/${encodeURIComponent(item.event_id)}`, { headers: { "X-Watchtower-Token": $("watchtowerToken").value.trim() } });
+                const response = await fetch(`${base}/api/v1/watchtower/events/${encodeURIComponent(item.event_id)}`, { headers: { "X-Watchtower-Token": $("apiAccessToken").value.trim() } });
                 const detail = await response.json(); if (!response.ok) throw new Error(detail.detail || "Unable to load event evidence.");
                 renderWatchtowerDetail(detail);
               } catch (error) { $("watchtowerActionStatus").textContent = error.message; }
@@ -483,12 +574,20 @@
           $("watchtowerActionStatus").textContent = error.message;
         }
       }
-      $("watchtowerToken").addEventListener("input", () => {
-        $("simulateInvoiceButton").disabled = !$("watchtowerToken").value.trim();
-        refreshWatchtower();
+      $("apiAccessToken").addEventListener("change", () => {
+        const hasToken = Boolean($("apiAccessToken").value.trim());
+        $("simulateInvoiceButton").disabled = !hasToken;
+        $("registerPaypalWebhook").disabled = !hasToken;
+        if (hasToken) {
+          refreshWatchtower();
+        } else {
+          $("watchtowerActionStatus").textContent = "Enter the Watchtower access token to load private event history.";
+          $("watchtowerEvents").textContent = "Event history is protected. Enter the access token above.";
+          $("watchtowerAlerts").textContent = "Alerts will appear here after authenticated event history loads.";
+        }
       });
       $("registerPaypalWebhook").addEventListener("click", async () => {
-        const token = $("watchtowerToken").value.trim();
+        const token = $("apiAccessToken").value.trim();
         if (!token) { $("watchtowerActionStatus").textContent = "Enter the Watchtower access token first."; return; }
         const button = $("registerPaypalWebhook"); button.disabled = true;
         $("watchtowerActionStatus").textContent = "Registering webhook with PayPal Sandbox…";
@@ -516,7 +615,7 @@
         try {
           const base = $("apiBase").value.trim().replace(/\/+$/, "");
           const response = await fetch(`${base}/api/v1/watchtower/demo/simulate-invoice`, {
-            method: "POST", headers: { "Content-Type": "application/json", "X-Watchtower-Token": $("watchtowerToken").value.trim() },
+            method: "POST", headers: { "Content-Type": "application/json", "X-Watchtower-Token": $("apiAccessToken").value.trim() },
             body: JSON.stringify({ identifier, identifier_hint: "INVOICE" })
           });
           const result = await response.json();
@@ -526,7 +625,7 @@
           const poll = async () => {
             await refreshWatchtower();
             if (Date.now() - started < 120000) {
-              const latest = await fetch(`${base}/api/v1/watchtower/events?limit=30`, { headers: { "X-Watchtower-Token": $("watchtowerToken").value.trim() } }).then(r => r.json()).catch(() => ({events:[]}));
+              const latest = await fetch(`${base}/api/v1/watchtower/events?limit=30`, { headers: { "X-Watchtower-Token": $("apiAccessToken").value.trim() } }).then(r => r.json()).catch(() => ({events:[]}));
               if (latest.events.some(e => e.event_id === result.event.event_id && ["RECEIVED","INVESTIGATING"].includes(e.status))) setTimeout(poll, 2500);
             }
           };
@@ -537,6 +636,41 @@
       });
       refreshWatchtower();
       setInterval(refreshWatchtower, 10000);
+
+      $("verifyEvidenceButton").addEventListener("click", async () => {
+        if (!currentEvidenceManifest) return;
+        const button = $("verifyEvidenceButton"); button.disabled = true;
+        $("evidenceVerifyStatus").textContent = "Verifying evidence hashes…";
+        try {
+          const base = $("apiBase").value.trim().replace(/\/+$/, "");
+          const token = $("apiAccessToken").value.trim();
+          const headers = { "Content-Type": "application/json" };
+          if (token) headers["X-Watchtower-Token"] = token;
+          const response = await fetch(`${base}/api/v1/evidence/verify`, {
+            method: "POST", headers, body: JSON.stringify({ manifest: currentEvidenceManifest })
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "Evidence verification request failed.");
+          $("evidenceVerifyStatus").textContent = result.valid
+            ? result.signature_status === "VERIFIED"
+              ? `Server signature verified · ${result.verified_evidence_records} evidence record(s) · ${result.verified_findings} finding(s).`
+              : `Hashes are internally consistent, but the receipt is unsigned · ${result.verified_evidence_records} evidence record(s).`
+            : `Integrity check failed · ${(result.errors || []).join(" ")}`;
+          $("evidenceVerifyStatus").className = result.valid ? "status" : "status error";
+        } catch (error) {
+          $("evidenceVerifyStatus").textContent = error.message;
+          $("evidenceVerifyStatus").className = "status error";
+        } finally { button.disabled = false; }
+      });
+
+      $("downloadEvidenceButton").addEventListener("click", () => {
+        if (!currentEvidenceManifest) return;
+        const blob = new Blob([JSON.stringify(currentEvidenceManifest, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url; link.download = `scamairbag-evidence-${Date.now()}.json`;
+        document.body.append(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+      });
 
       $("findingsSearch").addEventListener("input", event => {
         if (gridApi) gridApi.setGridOption("quickFilterText", event.target.value);
@@ -549,7 +683,7 @@
         const hint = $("identifierHint").value;
         if (identifier && hint === "UNKNOWN") { statusEl.textContent = "Choose the PayPal ID type."; statusEl.className = "status error"; return; }
         activeController?.abort(); activeController = new AbortController();
-        $("results").classList.remove("hidden"); $("timeline").replaceChildren();
+        $("results").classList.remove("hidden"); $("timeline").replaceChildren(); renderEvidenceManifest(null);
         $("summary").textContent = "Gathering evidence and checking applicable sources…";
         $("riskScore").textContent = "…"; $("recommendation").textContent = "Assessment pending";
         $("sources").textContent = "Waiting for source checks…"; renderDetail(null);
@@ -558,7 +692,7 @@
         try {
           const base = $("apiBase").value.trim().replace(/\/+$/, "");
           const response = await fetch(`${base}/api/v1/investigate/stream`, {
-            method: "POST", headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+            method: "POST", headers: { "Content-Type": "application/json", "Accept": "text/event-stream", ...( $("apiAccessToken").value.trim() ? { "X-Watchtower-Token": $("apiAccessToken").value.trim() } : {} ) },
             body: JSON.stringify(payload), signal: activeController.signal
           });
           const result = await consumeStream(response);
@@ -575,7 +709,7 @@
         if (gridApi) { gridApi.destroy(); gridApi = null; }
         $("timeline").replaceChildren(); $("sources").textContent = "Waiting for source checks.";
         $("findingCount").textContent = "0 findings"; $("findingsSearch").value = ""; renderDetail(null);
-        $("results").classList.add("hidden"); statusEl.textContent = "Ready when you are."; statusEl.className = "status";
+        $("results").classList.add("hidden"); renderEvidenceManifest(null); statusEl.textContent = "Ready when you are."; statusEl.className = "status";
       });
     })();
   </script>

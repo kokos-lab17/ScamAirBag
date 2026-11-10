@@ -41,8 +41,9 @@ minimized case indicators. It never receives raw messages or PayPal IDs.
 
 - **PayPal REST API:** source of transaction evidence. The app uses OAuth client credentials and the Sandbox base URL by default.
 - **Gemini (`google-genai`):** extracts untrusted message context and dynamically chooses allowlisted investigation tools. It does not calculate the final score.
-- **Python:** validates model decisions, executes approved tools, calculates risk and coverage, and controls API response status.
+- **Python:** validates model decisions, grounds outbound targets, executes approved tools, calculates risk and coverage, builds tamper-evident evidence receipts, and controls API response status.
 - **AG Grid Community:** sortable/filterable evidence findings grid in the browser.
+- **Evidence receipt:** a downloadable, hash-verifiable manifest connecting findings to minimized source observations and provenance.
 - **Elastic / Elasticsearch:** optional exact-domain lookup against historical records that users explicitly opted to contribute. Matches are contextual, not proof of fraud.
 - **Render Workflows:** optional background task for indexing minimized, consented indicators.
 - **Postman:** a collection is included for repeatable API checks.
@@ -50,14 +51,21 @@ minimized case indicators. It never receives raw messages or PayPal IDs.
 
 ## Features and safeguards
 
-- Correct PayPal seller fields: invoice `invoicer.email_address`; order `purchase_units[].payee.email_address`. Subscription `subscriber.email_address` is the payer, not the seller.
+- Correct PayPal seller fields: invoice `invoicer.email_address`; order `purchase_units[].payee.email_address`. Subscription `subscriber.email_address` is the payer, not the seller. Subscription investigations also retrieve the PayPal plan's verified billing-cycle price, currency, interval, status, and next billing time; plan-price availability is tracked as a separate coverage check.
 - Invoice private memo, recipient email addresses, and line-item descriptions are excluded from the invoice evidence payload.
 - User-supplied PayPal IDs require an explicit type: invoice, order, or subscription. IDs extracted from a message are queried only when the model classifies their type.
 - Domain checks are tracked separately per detected domain for DNS and WHOIS. An unchecked second domain cannot inherit the first domain's coverage.
+- Complete submitted links are inspected with pinned-IP HTTP HEAD requests; non-public DNS targets, unsupported ports, and unsafe redirect destinations are blocked. The page body is never downloaded.
+- A disclosed brand-domain heuristic flags one-edit lookalikes, brand names embedded in subdomains, and IDN punycode. Similarity is a review lead, not proof of impersonation.
+- Claimed payment amounts are compared with verified PayPal invoice/order totals only when the exact supporting quote is present and the currencies match.
+- Risk findings include cross-domain redirects, HTTPS downgrades, email-authentication failure claims, and exact-domain historical correlations with explicit uncertainty labels.
+- Every response includes a SHA-256 evidence manifest for minimized source observations and findings. Users can export it and verify record/root integrity; hashes are not source signatures or proof that an upstream provider's data was authentic.
+- The agent is restricted to exact links/domains in the submitted message or seller domains returned by a verified PayPal record. It cannot invent outbound inspection targets.
 - Failed lookups reduce coverage/confidence; they do not automatically add fraud risk.
 - Invalid domain attempts are tracked from the agent's selected arguments, so a missing normalized result cannot trigger endless retries.
 - Model-facing PayPal/domain evidence is minimized. Public API responses do not echo the raw submitted message or raw tool payloads.
 - Investigation status is explicit: `COMPLETED`, `PARTIAL`, or `FAILED`. Missing Gemini configuration returns an HTTP 503 from the non-streaming endpoint.
+- Production investigation and evidence-verification endpoints require a shared service token (`SCAM_AIRBAG_API_TOKEN`, falling back to `WATCHTOWER_INGEST_TOKEN`). Local development mode does not require this token. The API rejects unexpected request fields and bounds concurrent investigations.
 - Elastic storage is disabled by default and requires both an explicit UI opt-in and `ELASTIC_STORE_CASES=true`.
 
 ## Run locally
@@ -125,7 +133,7 @@ Watchtower adds an event intake path that can wake the existing investigation ag
 
 **Supported paths:**
 
-- **Verified PayPal Invoicing webhooks:** `POST /api/v1/watchtower/paypal/webhook` verifies the incoming transmission with PayPal's `/v1/notifications/verify-webhook-signature` API before trusting the event. The initial pre-payment allowlist includes invoice events `INVOICING.INVOICE.CREATED`, `INVOICING.INVOICE.SENT`, and `INVOICING.INVOICE.UPDATED`; order event `CHECKOUT.ORDER.APPROVED`; and subscription events `BILLING.SUBSCRIPTION.CREATED`, `BILLING.SUBSCRIPTION.ACTIVATED`, and `BILLING.SUBSCRIPTION.UPDATED`. A verified event automatically schedules the matching PayPal Sandbox invoice, order, or subscription lookup and investigation.
+- **Verified PayPal Invoicing webhooks:** `POST /api/v1/watchtower/paypal/webhook` verifies the incoming transmission with PayPal's `/v1/notifications/verify-webhook-signature` API before trusting the event. The initial pre-payment allowlist includes invoice events `INVOICING.INVOICE.CREATED`, `INVOICING.INVOICE.SENT`, and `INVOICING.INVOICE.UPDATED`; order event `CHECKOUT.ORDER.APPROVED`; and subscription lifecycle events `BILLING.SUBSCRIPTION.CREATED`, `BILLING.SUBSCRIPTION.ACTIVATED`, `BILLING.SUBSCRIPTION.UPDATED`, `BILLING.SUBSCRIPTION.SUSPENDED`, `BILLING.SUBSCRIPTION.CANCELLED`, and `BILLING.SUBSCRIPTION.EXPIRED`. A verified event automatically schedules the matching PayPal Sandbox invoice, order, or subscription lookup and investigation.
 - **Authenticated generic event intake:** `POST /api/v1/watchtower/events` requires the `X-Watchtower-Token` header matching `WATCHTOWER_INGEST_TOKEN`. The same token protects private event-history reads and the demo trigger; enter it in the Watchtower dashboard's access-token field. This is a trusted integration endpoint, not proof that the sender is PayPal.
 - **Explicit demo simulator:** `POST /api/v1/watchtower/demo/simulate-invoice` is available only when `WATCHTOWER_DEMO_ENABLED=true`. The dashboard labels this as simulated. The investigation still attempts a real Sandbox invoice lookup; no invoice facts are fabricated.
 
@@ -144,10 +152,13 @@ PAYPAL_WEBHOOK_ID=your_sandbox_webhook_id
 WATCHTOWER_PUBLIC_API_URL=https://your-api-host.onrender.com
 WATCHTOWER_DEMO_ENABLED=true
 WATCHTOWER_INGEST_TOKEN=use-a-long-random-secret-for-your-own-integration
-WATCHTOWER_DB_PATH=/var/data/watchtower.sqlite3\nWATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE=false
+WATCHTOWER_DB_PATH=/var/data/watchtower.sqlite3
+WATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE=false
 ```
 
-`WATCHTOWER_DB_PATH` must point to a mounted persistent disk path if event history must survive Render instance replacement/restarts. Without persistent storage, SQLite is only local/ephemeral history. Autonomous case storage is off by default. Set `WATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE=true` only after explicitly opting in; actual storage also requires `ELASTIC_STORE_CASES=true`. Historical lookups can use configured Elastic records, but matches remain contextual and never prove fraud.\n\nThe current background task runner is single-process and in-process: it is appropriate for a controlled hackathon prototype, not yet a production durable queue. PayPal's Developer Dashboard webhook simulator does not support postback signature verification; use a real Sandbox app event for the verified-webhook path, or the clearly labelled Watchtower demo simulator to demonstrate automatic agent wake-up. A process restart can interrupt an active investigation; the next engineering phase is a durable worker/queue and deployment-aware recovery.
+`WATCHTOWER_DB_PATH` must point to a mounted persistent disk path if event history must survive Render instance replacement/restarts. The Render blueprint now provisions a 1 GB persistent disk at `/var/data` and configures SQLite to use it. Autonomous case storage is off by default. Set `WATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE=true` only after explicitly opting in; actual storage also requires `ELASTIC_STORE_CASES=true`. Historical lookups can use configured Elastic records, but matches remain contextual and never prove fraud.
+
+The event ledger is persisted in SQLite, with a configurable retention period (`WATCHTOWER_RETENTION_DAYS`, default 90 days) that purges expired event evidence automatically. Interrupted `INVESTIGATING` records are re-queued on API startup. Execution is still an in-process, single-instance worker; keep the Render API at one instance and one Uvicorn worker. This is restart-recoverable for the configured deployment, but it is not a horizontally scalable distributed queue. A dedicated external queue and independently scaled workers are still required before claiming high-availability production operation. PayPal's Developer Dashboard webhook simulator does not support postback signature verification; use a real Sandbox app event for the verified-webhook path, or the clearly labelled Watchtower demo simulator to demonstrate automatic agent wake-up.
 
 ### Watchtower API
 
@@ -213,8 +224,10 @@ The static site origin in `CORS_ORIGINS` must exactly match the deployed fronten
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | `/health` | Liveness check; does not reveal secret configuration |
+| GET | `/ready` | Configuration readiness checks; no provider API calls are made |
 | POST | `/api/v1/investigate` | Complete investigation response |
 | POST | `/api/v1/investigate/stream` | Progress events and final result using POST + SSE |
+| POST | `/api/v1/evidence/verify` | Verify evidence manifest hashes and root integrity |
 
 The streaming endpoint must be consumed with `fetch()` and a readable response stream; native `EventSource` cannot send the JSON POST body.
 
@@ -252,6 +265,13 @@ Import `postman/ScamAirbag.postman_collection.json` into Postman. Set `baseUrl` 
 - **APIMatic:** see [`docs/APIMATIC_CONTEXT_PLUGIN.md`](docs/APIMATIC_CONTEXT_PLUGIN.md). This is a developer workflow note, not a runtime integration.
 - **Postman:** see the included collection for API testing.
 
-## Security before public deployment
+## Deployment security and operating boundary
 
-This prototype still needs authentication, per-user authorization, rate limiting, abuse monitoring, secret rotation, retention controls, and a formal privacy review before public use. Keep it on Sandbox credentials until those controls are implemented.
+- Set `APP_ENV=production`. The Render blueprint does this and restricts CORS to the configured frontend origin.
+- Configure a long, random `SCAM_AIRBAG_API_TOKEN` or `WATCHTOWER_INGEST_TOKEN`. Set a separate `EVIDENCE_SIGNING_KEY` if you want evidence receipts signed independently of the API access token; otherwise the service token is used for HMAC signing. The frontend's Service token field sends it only in request headers. Production requests are rate-limited per IP and bounded for request size and concurrent model calls. Do not place it in source code or commit it.
+- The current token is a **single-operator shared secret**, not multi-user identity, tenant isolation, or customer account authentication. Do not expose this deployment as a public multi-tenant service.
+- The current durable Watchtower runner is restart-recoverable but single-instance and in-process. Run one API instance and one Uvicorn worker; use an external durable queue and independently managed workers before horizontal scaling or high-availability claims.
+- Configure persistent disk storage and rotate secrets if they are exposed. Set retention/deletion policies appropriate to your deployment and obtain consent before enabling historical case contribution.
+- Keep PayPal Sandbox credentials and event subscriptions separate from Live. This release is an evidence-backed decision-support system; it never executes, approves, declines, cancels, or moves money.
+- The evidence manifest's HMAC signature detects report edits unless the signing secret is compromised. It is a ScamAirbag server signature, not a digital signature from PayPal, VirusTotal, WHOIS, or a mail provider. Email headers pasted by a user remain untrusted claims until independently authenticated.
+- The app has automated regression coverage, but live PayPal webhook delivery, PayPal API permissions, Render persistent disk behavior, and third-party API quotas must still be verified in the target account before production use.

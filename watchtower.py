@@ -9,14 +9,17 @@ from fastapi import APIRouter, Header, HTTPException, Request
 import requests
 from tools import PAYPAL_BASE_URL, PAYPAL_TIMEOUT_SECONDS, _get_paypal_access_token
 from pydantic import BaseModel, Field, field_validator
-from agent import run_investigation
+from agent import MAX_INVESTIGATION_SECONDS, run_investigation
 from schemas import InvestigationInput, InvestigationTrace
 
 router = APIRouter(prefix="/api/v1/watchtower", tags=["Watchtower"])
 _DB_PATH = os.getenv("WATCHTOWER_DB_PATH", "watchtower.sqlite3")
 _DEMO_ENABLED = os.getenv("WATCHTOWER_DEMO_ENABLED", "false").lower() in {"1","true","yes"}
-_INGEST_TOKEN = os.getenv("WATCHTOWER_INGEST_TOKEN", "")
+_INGEST_TOKEN = os.getenv("SCAM_AIRBAG_API_TOKEN") or os.getenv("WATCHTOWER_INGEST_TOKEN", "")
+_WATCHTOWER_RETENTION_DAYS = max(1, min(3650, int(os.getenv("WATCHTOWER_RETENTION_DAYS", "90"))))
 _TASKS: set[asyncio.Task] = set()
+_WATCHTOWER_MAX_CONCURRENT = max(1, min(4, int(os.getenv("WATCHTOWER_MAX_CONCURRENT", "2"))))
+_WORKER_SEMAPHORE = asyncio.Semaphore(_WATCHTOWER_MAX_CONCURRENT)
 
 def _now(): return datetime.now(timezone.utc).isoformat()
 def _connect():
@@ -46,6 +49,12 @@ def init_watchtower():
         completed_at TEXT, result_json TEXT, error_code TEXT)""")
         db.execute("CREATE INDEX IF NOT EXISTS idx_watchtower_received ON watchtower_events(received_at DESC)")
         db.execute("CREATE TABLE IF NOT EXISTS watchtower_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL)")
+        # Event records contain transaction identifiers and investigation evidence.
+        # Purge them after the configured retention window.
+        db.execute(
+            "DELETE FROM watchtower_events WHERE julianday(received_at) < julianday('now', ?)",
+            (f"-{_WATCHTOWER_RETENTION_DAYS} days",),
+        )
 
 def _get_setting(key: str) -> Optional[str]:
     with _db() as db:
@@ -70,6 +79,9 @@ PAYPAL_EVENT_HINTS = {
     "BILLING.SUBSCRIPTION.CREATED": "SUBSCRIPTION",
     "BILLING.SUBSCRIPTION.ACTIVATED": "SUBSCRIPTION",
     "BILLING.SUBSCRIPTION.UPDATED": "SUBSCRIPTION",
+    "BILLING.SUBSCRIPTION.SUSPENDED": "SUBSCRIPTION",
+    "BILLING.SUBSCRIPTION.CANCELLED": "SUBSCRIPTION",
+    "BILLING.SUBSCRIPTION.EXPIRED": "SUBSCRIPTION",
 }
 
 
@@ -114,6 +126,10 @@ def _require_ingest_token(token:Optional[str]):
 def _create_event(event_id,source,event_type,identifier,hint):
     now=_now()
     with _db() as db:
+        db.execute(
+            "DELETE FROM watchtower_events WHERE julianday(received_at) < julianday('now', ?)",
+            (f"-{_WATCHTOWER_RETENTION_DAYS} days",),
+        )
         cursor=db.execute("""INSERT OR IGNORE INTO watchtower_events
         (event_id,source,event_type,identifier,identifier_hint,status,received_at,updated_at)
         VALUES (?,?,?,?,?,'RECEIVED',?,?)""",(event_id,source,event_type,identifier,hint,now,now))
@@ -171,6 +187,47 @@ def _build_watchtower_alert(trace: InvestigationTrace) -> Dict[str, Any]:
     }
 
 
+def _correlate_prior_domains(event_id: str, current_result: Dict[str, Any]) -> list[Dict[str, Any]]:
+    """Correlate exact observed domains across prior Watchtower cases, without treating repetition as proof."""
+    current_domains = {
+        item.get("observations", {}).get("domain")
+        for item in current_result.get("domain_evidence", [])
+        if isinstance(item, dict) and item.get("observations", {}).get("domain")
+    }
+    if not current_domains:
+        return []
+    with _db() as db:
+        rows = db.execute(
+            "SELECT received_at,result_json FROM watchtower_events "
+            "WHERE event_id<>? AND status IN ('COMPLETED','PARTIAL') "
+            "AND result_json IS NOT NULL ORDER BY received_at DESC LIMIT 250",
+            (event_id,),
+        ).fetchall()
+    correlations = []
+    for domain in sorted(current_domains):
+        matches = []
+        for row in rows:
+            try:
+                prior = json.loads(row["result_json"])
+            except (TypeError, ValueError):
+                continue
+            prior_domains = {
+                item.get("observations", {}).get("domain")
+                for item in prior.get("domain_evidence", [])
+                if isinstance(item, dict) and item.get("observations", {}).get("domain")
+            }
+            if domain in prior_domains:
+                matches.append(row["received_at"])
+        if matches:
+            correlations.append({
+                "domain": domain,
+                "prior_case_observations": len(matches),
+                "most_recent_prior_observation": matches[0],
+                "interpretation": "Repeated appearance is contextual correlation only; it does not establish common ownership or fraud.",
+            })
+    return correlations
+
+
 async def _investigate_event(event_id,public_trace):
     now = _now()
     with _db() as db:
@@ -183,16 +240,28 @@ async def _investigate_event(event_id,public_trace):
         r=db.execute("SELECT * FROM watchtower_events WHERE event_id=?",(event_id,)).fetchone()
     try:
         payload=InvestigationInput(identifier=r["identifier"],identifier_hint=r["identifier_hint"],share_anonymized_intelligence=os.getenv("WATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE","false").lower() in {"1","true","yes"})
-        trace=await asyncio.to_thread(run_investigation,payload)
+        trace=await asyncio.wait_for(
+            asyncio.to_thread(run_investigation, payload),
+            timeout=MAX_INVESTIGATION_SECONDS + 45,
+        )
         result=public_trace(trace)
+        correlations = _correlate_prior_domains(event_id, result)
+        result["historical_correlations"] = correlations
         result["watchtower_alert"] = _build_watchtower_alert(trace)
+        if correlations:
+            result["watchtower_alert"]["historical_context"] = correlations
         status="COMPLETED" if trace.status=="COMPLETED" else "PARTIAL" if trace.status=="PARTIAL" else "FAILED"
         _update(event_id,status=status,completed_at=_now(),result_json=json.dumps(result,separators=(",",":"),ensure_ascii=False),error_code=trace.error_code)
+    except asyncio.TimeoutError:
+        _update(event_id,status="FAILED",completed_at=_now(),error_code="WATCHTOWER_INVESTIGATION_TIMEOUT")
     except Exception:
         _update(event_id,status="FAILED",completed_at=_now(),error_code="WATCHTOWER_INVESTIGATION_FAILED")
 
 def _schedule(event_id,public_trace):
-    task=asyncio.create_task(_investigate_event(event_id,public_trace)); _TASKS.add(task); task.add_done_callback(_TASKS.discard)
+    async def bounded_investigation():
+        async with _WORKER_SEMAPHORE:
+            await _investigate_event(event_id, public_trace)
+    task=asyncio.create_task(bounded_investigation()); _TASKS.add(task); task.add_done_callback(_TASKS.discard)
 
 
 def _verify_paypal_signature(headers: Dict[str, str], event: Dict[str, Any], raw_body: bytes) -> bool:

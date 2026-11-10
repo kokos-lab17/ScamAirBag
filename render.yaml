@@ -6,9 +6,25 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
+    disk:
+      name: scamairbag-watchtower-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
+      - key: APP_ENV
+        value: production
+      - key: SCAM_AIRBAG_API_TOKEN
+        sync: false
+      - key: EVIDENCE_SIGNING_KEY
+        sync: false
       - key: PYTHON_VERSION
         value: 3.12.8
+      - key: MAX_CONCURRENT_INVESTIGATIONS
+        value: "3"
+      - key: INVESTIGATION_RATE_LIMIT_PER_MINUTE
+        value: "20"
+      - key: MAX_INVESTIGATION_SECONDS
+        value: "180"
       - key: CORS_ORIGINS
         value: https://scamairbag-web-sqh8.onrender.com
       - key: PAYPAL_BASE_URL
@@ -20,11 +36,15 @@ services:
       - key: GEMINI_MODEL
         value: gemini-3.1-flash-lite
       - key: GEMINI_FALLBACK_MODEL
-        value: gemini-3.1-flash-lite
+        value: gemini-2.5-flash
       - key: PAYPAL_CLIENT_ID
         sync: false
       - key: PAYPAL_CLIENT_SECRET
         sync: false
+      - key: VIRUSTOTAL_API_KEY
+        sync: false
+      - key: THREAT_INTEL_TIMEOUT_SECONDS
+        value: "8"
       - key: ELASTICSEARCH_URL
         sync: false
       - key: ELASTIC_API_KEY
@@ -33,11 +53,25 @@ services:
         value: scamairbag-investigations
       - key: ELASTIC_TIMEOUT_SECONDS
         value: "5"
-      - key: ELASTIC_STORE_CASES
-        value: "false"
       - key: RENDER_API_KEY
         sync: false
       - key: RENDER_INDEX_TASK_SLUG
+        sync: false
+      - key: WATCHTOWER_PUBLIC_API_URL
+        sync: false
+      - key: WATCHTOWER_INGEST_TOKEN
+        sync: false
+      - key: WATCHTOWER_DB_PATH
+        value: /var/data/watchtower.sqlite3
+      - key: WATCHTOWER_MAX_CONCURRENT
+        value: "2"
+      - key: WATCHTOWER_RETENTION_DAYS
+        value: "90"
+      - key: WATCHTOWER_DEMO_ENABLED
+        value: "false"
+      - key: WATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE
+        value: "false"
+      - key: PAYPAL_WEBHOOK_ID
         sync: false
 
   - type: static

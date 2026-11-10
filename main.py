@@ -26,8 +26,13 @@ Security notes:
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
+import hmac
+import time
+import threading
+from collections import deque
 from dotenv import load_dotenv
 load_dotenv()
 import os
@@ -36,22 +41,35 @@ from typing import Any, Dict, Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agent import run_investigation
 from schemas import InvestigationInput, InvestigationTrace
-from watchtower import build_watchtower_router, resume_watchtower_jobs
+from watchtower import _get_setting, build_watchtower_router, resume_watchtower_jobs
+from evidence_manifest import build_evidence_manifest, verify_evidence_manifest
 
 logger = logging.getLogger("scamairbag.api")
 
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
 MAX_USER_TEXT_CHARS = int(os.getenv("MAX_USER_TEXT_CHARS", "12000"))
+APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 MAX_IDENTIFIER_CHARS = 200
+MAX_CONCURRENT_INVESTIGATIONS = max(1, min(8, int(os.getenv("MAX_CONCURRENT_INVESTIGATIONS", "3"))))
+INVESTIGATION_RATE_LIMIT_PER_MINUTE = max(1, int(os.getenv("INVESTIGATION_RATE_LIMIT_PER_MINUTE", "20")))
+MAX_API_BODY_BYTES = 40000
+_rate_windows: Dict[str, deque] = {}
+_investigation_semaphore = asyncio.Semaphore(MAX_CONCURRENT_INVESTIGATIONS)
 ALLOWED_IDENTIFIER_HINTS = {"UNKNOWN", "INVOICE", "ORDER", "SUBSCRIPTION"}
+
+
+class EvidenceManifestVerificationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    manifest: Dict[str, Any]
 
 
 class InvestigationRequest(BaseModel):
     """Validated public API request; maps to the shared internal input schema."""
+    model_config = ConfigDict(extra="forbid")
 
     user_text: Optional[str] = Field(
         default=None,
@@ -109,6 +127,13 @@ class InvestigationRequest(BaseModel):
         )
 
 
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Recover durable Watchtower event records when the API process starts."""
+    await resume_watchtower_jobs(_public_trace)
+    yield
+
+
 app = FastAPI(
     title="ScamAirbag API",
     description=(
@@ -116,6 +141,7 @@ app = FastAPI(
         "domain intelligence, and deterministic risk scoring."
     ),
     version=APP_VERSION,
+    lifespan=lifespan,
 )
 
 # Local development defaults. For deployment, set CORS_ORIGINS to a
@@ -130,22 +156,76 @@ _allowed_origins = [
     if origin.strip()
 ]
 
-# Always permit common local development servers, even when .env contains
-# only the deployed frontend origin. These are loopback origins, not wildcards.
+# Loopback development origins are allowed only outside production.
+# Production trusts only the exact origins listed in CORS_ORIGINS.
 _local_dev_origins = [
     f"http://{host}:{port}"
     for host in ("localhost", "127.0.0.1")
     for port in (3000, 5173, 5500, 5501)
 ]
-_allowed_origins = list(dict.fromkeys(_allowed_origins + _local_dev_origins))
+if APP_ENV in {"development", "dev", "local"}:
+    _allowed_origins = list(dict.fromkeys(_allowed_origins + _local_dev_origins))
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type", "Authorization", "X-Watchtower-Token"],
 )
+
+
+@app.middleware("http")
+async def require_service_token_for_investigations(request: Request, call_next):
+    """Require a shared operator token for costly/private investigation endpoints in production."""
+    protected = {
+        "/api/v1/investigate",
+        "/api/v1/investigate/stream",
+        "/api/v1/evidence/verify",
+    }
+    if (APP_ENV in {"production", "prod"} and request.method != "OPTIONS"
+            and request.url.path in protected):
+        expected = os.getenv("SCAM_AIRBAG_API_TOKEN") or os.getenv("WATCHTOWER_INGEST_TOKEN")
+        if not expected:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "The production API access token has not been configured."},
+            )
+        supplied = request.headers.get("x-watchtower-token", "")
+        authorization = request.headers.get("authorization", "")
+        if not supplied and authorization.lower().startswith("bearer "):
+            supplied = authorization[7:].strip()
+        if not supplied or not hmac.compare_digest(expected, supplied):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "A valid ScamAirbag service access token is required."},
+            )
+        try:
+            body_length = int(request.headers.get("content-length", "0"))
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."})
+        if body_length > MAX_API_BODY_BYTES:
+            return JSONResponse(status_code=413, content={"detail": "Request body exceeds the API size limit."})
+        # Single-instance, per-IP sliding window. Use an external shared limiter
+        # before scaling this API horizontally.
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.monotonic()
+        window = _rate_windows.setdefault(client_ip, deque())
+        while window and now - window[0] >= 60:
+            window.popleft()
+        if len(window) >= INVESTIGATION_RATE_LIMIT_PER_MINUTE:
+            retry_after = max(1, int(60 - (now - window[0])))
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Investigation rate limit reached. Try again shortly."},
+                headers={"Retry-After": str(retry_after)},
+            )
+        window.append(now)
+        if len(_rate_windows) > 5000:
+            stale = [key for key, entries in _rate_windows.items() if not entries or now - entries[-1] >= 60]
+            for key in stale:
+                _rate_windows.pop(key, None)
+    return await call_next(request)
 
 
 def _dump_model(value: Any) -> Dict[str, Any]:
@@ -158,7 +238,7 @@ def _dump_model(value: Any) -> Dict[str, Any]:
 def _public_domain_evidence(trace: InvestigationTrace) -> list[Dict[str, Any]]:
     """Expose a strict allowlist of non-personal domain observations."""
     allowed = {
-        "domain", "lookalike_observation", "initial_url", "initial_host", "final_host", "resolved_ips", "dns_status", "whois_status",
+        "domain", "lookalike_observation", "initial_host", "final_host", "resolved_ips", "dns_status", "whois_status",
         "creation_date", "domain_age_days", "whois_available",
         "tls_status", "tls_checked", "tls_issuer", "tls_not_before",
         "tls_not_after", "tls_days_until_expiry", "tls_subject_alt_names",
@@ -181,8 +261,22 @@ def _public_domain_evidence(trace: InvestigationTrace) -> list[Dict[str, Any]]:
         })
     return evidence
 
+def _evidence_signing_key() -> Optional[str]:
+    """Prefer a dedicated signing secret; fall back to the configured service token."""
+    return (
+        os.getenv("EVIDENCE_SIGNING_KEY")
+        or os.getenv("SCAM_AIRBAG_API_TOKEN")
+        or os.getenv("WATCHTOWER_INGEST_TOKEN")
+    )
+
+
 def _public_trace(trace: InvestigationTrace) -> Dict[str, Any]:
     """Return an audit summary without echoing raw messages or raw tool payloads."""
+    evidence_manifest = build_evidence_manifest(trace, signing_key=_evidence_signing_key())
+    paypal_evidence = [
+        item for item in evidence_manifest["evidence_records"]
+        if item["tool_name"] in {"paypal_invoice", "paypal_order", "paypal_subscription"}
+    ]
     steps = []
     for step in trace.steps:
         result = step.result
@@ -216,14 +310,12 @@ def _public_trace(trace: InvestigationTrace) -> Dict[str, Any]:
             if trace.final_scorecard and hasattr(trace.final_scorecard, "model_dump")
             else trace.final_scorecard.dict() if trace.final_scorecard else None
         ),
+        "evidence_manifest": evidence_manifest,
+        "paypal_evidence": paypal_evidence,
     }
 
 
 app.include_router(build_watchtower_router(_public_trace))
-
-@app.on_event("startup")
-async def recover_watchtower_jobs_on_startup() -> None:
-    await resume_watchtower_jobs(_public_trace)
 
 
 def _sse(event_name: str, payload: Dict[str, Any]) -> str:
@@ -233,10 +325,52 @@ def _sse(event_name: str, payload: Dict[str, Any]) -> str:
     return f"event: {event_name}\ndata: {serialized}\n\n"
 
 
+@app.post("/api/v1/evidence/verify")
+async def verify_evidence(payload: EvidenceManifestVerificationRequest) -> Dict[str, Any]:
+    """Verify hashes in a previously exported evidence manifest."""
+    return verify_evidence_manifest(payload.manifest, signing_key=_evidence_signing_key())
+
+
 @app.get("/health")
 async def health() -> Dict[str, str]:
     """Liveness endpoint; deliberately does not reveal secret configuration."""
     return {"status": "ok", "service": "scamairbag-api", "version": APP_VERSION}
+
+
+@app.get("/ready")
+async def readiness() -> JSONResponse:
+    """Report configuration readiness without exposing secret values or making paid API calls."""
+    paypal_configured = bool(os.getenv("PAYPAL_CLIENT_ID") and os.getenv("PAYPAL_CLIENT_SECRET"))
+    gemini_configured = bool(os.getenv("GEMINI_API_KEY"))
+    service_token_configured = bool(os.getenv("SCAM_AIRBAG_API_TOKEN") or os.getenv("WATCHTOWER_INGEST_TOKEN"))
+    signing_key_configured = bool(_evidence_signing_key())
+    db_path = os.getenv("WATCHTOWER_DB_PATH", "watchtower.sqlite3")
+    storage_directory = os.path.dirname(os.path.abspath(db_path))
+    storage_writable = os.path.isdir(storage_directory) and os.access(storage_directory, os.W_OK)
+    try:
+        paypal_webhook_configured = bool(_get_setting("PAYPAL_WEBHOOK_ID") or os.getenv("PAYPAL_WEBHOOK_ID"))
+    except Exception:
+        paypal_webhook_configured = False
+    checks = {
+        "gemini_configured": gemini_configured,
+        "paypal_credentials_configured": paypal_configured,
+        "production_service_token_configured": service_token_configured if APP_ENV in {"production", "prod"} else True,
+        "evidence_signing_key_configured": signing_key_configured,
+        "watchtower_storage_directory_writable": storage_writable,
+        "paypal_webhook_id_configured": paypal_webhook_configured,
+    }
+    required = [
+        "gemini_configured", "paypal_credentials_configured",
+        "production_service_token_configured", "evidence_signing_key_configured",
+        "watchtower_storage_directory_writable",
+    ]
+    ready = all(checks[key] for key in required)
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={"status": "ready" if ready else "degraded", "service": "scamairbag-api",
+                 "version": APP_VERSION, "checks": checks,
+                 "note": "Readiness checks validate configuration only; they do not perform live provider API calls."},
+    )
 
 
 @app.post("/api/v1/investigate", response_model=None)
@@ -249,9 +383,10 @@ async def investigate(payload: InvestigationRequest) -> JSONResponse:
     """
     investigation_input = payload.to_investigation_input()
     try:
-        trace: InvestigationTrace = await asyncio.to_thread(
-            run_investigation, investigation_input
-        )
+        async with _investigation_semaphore:
+            trace: InvestigationTrace = await asyncio.to_thread(
+                run_investigation, investigation_input
+            )
         public_result = _public_trace(trace)
         return JSONResponse(
             content=public_result,
@@ -282,8 +417,12 @@ async def investigate_stream(
     loop = asyncio.get_running_loop()
     finished = object()
 
+    cancel_event = threading.Event()
+
     def publish_event(event: Any) -> None:
         # Callback executes in the worker thread.
+        if cancel_event.is_set():
+            return
         try:
             event_payload = _dump_model(event)
             loop.call_soon_threadsafe(
@@ -299,19 +438,34 @@ async def investigate_stream(
             return run_investigation(
                 investigation_input,
                 event_callback=publish_event,
+                cancel_event=cancel_event,
             )
         except Exception:
             logger.exception("Unexpected streaming investigation failure")
             raise
 
     async def event_generator():
-        worker = asyncio.create_task(asyncio.to_thread(run_and_publish))
+        async def bounded_worker():
+            async with _investigation_semaphore:
+                return await asyncio.to_thread(run_and_publish)
+
+        worker = asyncio.create_task(bounded_worker())
+
+        def consume_worker_completion(task: asyncio.Task) -> None:
+            if task.cancelled():
+                return
+            try:
+                task.result()
+            except Exception:
+                logger.exception("Background investigation worker failed after stream closure")
+
+        worker.add_done_callback(consume_worker_completion)
         try:
             yield ": scamairbag investigation stream\n\n"
 
             while True:
                 if await request.is_disconnected():
-                    worker.cancel()
+                    cancel_event.set()
                     break
 
                 try:
@@ -345,7 +499,10 @@ async def investigate_stream(
                     break
         finally:
             if not worker.done():
-                worker.cancel()
+                # asyncio cannot stop an already-running worker thread. Signal
+                # cooperative cancellation and keep its semaphore slot until
+                # the provider call returns and the controller exits.
+                cancel_event.set()
 
     return StreamingResponse(
         event_generator(),

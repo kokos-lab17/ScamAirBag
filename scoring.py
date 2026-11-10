@@ -17,6 +17,7 @@ Important:
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from elastic_intelligence import elastic_is_configured
@@ -43,6 +44,11 @@ RULE_WEIGHTS = {
     "HIGH_PRESSURE_LANGUAGE": 10,
     "UNUSUAL_PAYMENT_INSTRUCTION": 25,
     "DOMAIN_DOES_NOT_RESOLVE": 0,
+    "PAYMENT_AMOUNT_MISMATCH": 40,
+    "POTENTIAL_BRAND_LOOKALIKE": 20,
+    "HTTPS_TO_HTTP_DOWNGRADE": 20,
+    "CROSS_DOMAIN_REDIRECT": 10,
+    "EMAIL_AUTHENTICATION_FAILURE_CLAIM": 10,
 }
 
 SUCCESS_STATUSES = {"SUCCESS", "VERIFIED", "COMPLETED"}
@@ -141,6 +147,64 @@ def _paypal_seller_email(
                 return email, "PayPal order purchase_units.payee.email_address"
 
     return None, None
+
+
+def _paypal_amounts(tool_results: Sequence[ToolExecutionResult]) -> List[Tuple[str, str, str]]:
+    """Return verified seller-side invoice/order totals as (value, currency, source)."""
+    amounts: List[Tuple[str, str, str]] = []
+    invoice = _result_by_name(tool_results, "paypal_invoice")
+    if invoice and invoice.status == "SUCCESS":
+        amount = invoice.data.get("amount") or {}
+        if isinstance(amount, dict) and amount.get("value") is not None and amount.get("currency_code"):
+            amounts.append((str(amount["value"]), str(amount["currency_code"]).upper(), "PayPal invoice amount"))
+    order = _result_by_name(tool_results, "paypal_order")
+    if order and order.status == "SUCCESS":
+        for index, unit in enumerate(order.data.get("purchase_units") or [], start=1):
+            amount = unit.get("amount") or {}
+            if isinstance(amount, dict) and amount.get("value") is not None and amount.get("currency_code"):
+                amounts.append((str(amount["value"]), str(amount["currency_code"]).upper(), f"PayPal order purchase unit {index}"))
+    return amounts
+
+
+def _compare_claimed_amount(entities: ExtractedEntities, tool_results: Sequence[ToolExecutionResult],
+                            input_text: Optional[str]) -> Tuple[Optional[bool], Optional[str]]:
+    """Compare only an amount whose exact supporting quote appears in the user's text."""
+    claimed = entities.claimed_amount
+    quote = entities.claimed_amount_quote
+    currency = (entities.claimed_currency_code or "").upper().strip()
+    if not claimed:
+        return None, None
+    if not input_text or not quote or quote not in input_text:
+        return None, "The extracted payment amount did not include a verbatim supporting quote found in the submitted message."
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        return None, "The message's currency could not be established unambiguously, so no cross-source amount comparison was made."
+    # The quoted text itself must support both the numeric value and currency;
+    # this prevents a model from attaching an unrelated exact quote to a guess.
+    numeric_quote = re.search(r"(?<![\d.])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?(?![\d.])", quote)
+    if not numeric_quote:
+        return None, "The exact supporting quote does not contain a parseable payment amount."
+    explicit_currency = bool(re.search(rf"(?<![A-Z]){re.escape(currency)}(?![A-Z])", quote.upper()))
+    unique_symbols = {"₹": "INR", "€": "EUR", "£": "GBP"}
+    explicit_currency = explicit_currency or any(symbol in quote and code == currency for symbol, code in unique_symbols.items())
+    if not explicit_currency:
+        return None, "The exact supporting quote does not establish the claimed currency code."
+    try:
+        claimed_value = Decimal(claimed.replace(",", "").strip())
+        quoted_value = Decimal(numeric_quote.group(0).replace(",", ""))
+        if claimed_value != quoted_value:
+            return None, "The extracted amount does not match the numeric value in its exact supporting quote."
+    except (InvalidOperation, AttributeError):
+        return None, "The stated amount could not be normalized safely."
+    verified = [item for item in _paypal_amounts(tool_results) if item[1] == currency]
+    if not verified:
+        return None, f"No verified PayPal invoice/order amount in {currency} was available for comparison."
+    for value, code, source in verified:
+        try:
+            if Decimal(value) != claimed_value:
+                return False, f"Message quote: {quote!r}; stated amount: {claimed_value} {currency}; {source}: {value} {code}."
+        except InvalidOperation:
+            continue
+    return True, f"Message quote: {quote!r}; stated amount {claimed_value} {currency} matches the verified PayPal amount(s)."
 
 
 def _paypal_seller_domains(tool_results: Sequence[ToolExecutionResult]) -> List[str]:
@@ -260,6 +324,15 @@ def build_source_outcomes(
             result.provenance if result else EvidenceProvenance.UNAVAILABLE,
             result.error_code if result else "PAYPAL_LOOKUP_NOT_ATTEMPTED",
         ))
+        if tool_name == "paypal_subscription" and result and result.status == "SUCCESS":
+            plan_status = result.data.get("plan_details_status")
+            plan_verified = plan_status == "VERIFIED"
+            outcomes.append(_source_outcome(
+                "paypal_subscription_plan", True,
+                "SUCCESS" if plan_verified else "FAILED",
+                EvidenceProvenance.VERIFIED_PAYPAL if plan_verified else EvidenceProvenance.UNAVAILABLE,
+                None if plan_verified else result.data.get("plan_error_code", "SUBSCRIPTION_PLAN_UNAVAILABLE"),
+            ))
     elif identifier:
         outcomes.append(_source_outcome(
             "paypal_identifier", True, "SKIPPED", EvidenceProvenance.UNAVAILABLE,
@@ -456,6 +529,16 @@ def _build_findings(
                 f"Claimed seller email could not be compared with a verified PayPal seller email: {claimed_email}"
             )
 
+        amount_match, amount_evidence = _compare_claimed_amount(entities, tool_results, input_text)
+        if amount_match is False:
+            findings.append(_make_finding(
+                "PAYMENT_AMOUNT_MISMATCH",
+                "The payment amount stated in the message differs from the amount returned by PayPal.",
+                RiskLevel.HIGH, EvidenceProvenance.VERIFIED_PAYPAL, RULE_WEIGHTS["PAYMENT_AMOUNT_MISMATCH"], amount_evidence or "",
+            ))
+        elif amount_match is None and entities.claimed_amount:
+            unverified_claims.append(amount_evidence or "The stated amount could not be verified against PayPal.")
+
         # Prefer deterministic checks against the original message for high-impact
         # social-engineering indicators. The model's labels remain useful for
         # additional context, but must not create duplicate points for the same signal.
@@ -606,6 +689,56 @@ def _build_findings(
                 "Link-like text: " + " | ".join(malformed)[:900],
             ))
 
+
+    # A static brand-domain comparison is a lead only; the exact heuristic and
+    # matched reference are preserved in the supporting evidence.
+    for domain_result in (item for item in tool_results if item.tool_name == "domain_intelligence"):
+        observation = domain_result.data.get("lookalike_observation") or {}
+        if observation.get("status") == "POTENTIAL_MATCH":
+            matches = observation.get("matches") or []
+            findings.append(_make_finding(
+                "POTENTIAL_BRAND_LOOKALIKE",
+                "The observed hostname resembles a known brand domain or places a brand name in a deceptive subdomain. Similarity is not proof of impersonation.",
+                RiskLevel.MEDIUM, EvidenceProvenance.OBSERVED_EXTERNAL, RULE_WEIGHTS["POTENTIAL_BRAND_LOOKALIKE"],
+                f"Observed domain: {domain_result.data.get('domain')}; heuristic matches: {matches[:3]}; reference set: {observation.get('reference_domains', [])}.",
+            ))
+
+    # Redirect behaviour is observed without downloading page content.
+    for redirect in (item for item in tool_results if item.tool_name == "link_redirect_inspection"):
+        if redirect.status != "SUCCESS":
+            continue
+        if redirect.data.get("https_downgrade"):
+            findings.append(_make_finding(
+                "HTTPS_TO_HTTP_DOWNGRADE",
+                "The submitted link redirects from HTTPS to HTTP, removing transport encryption for the destination.",
+                RiskLevel.HIGH, EvidenceProvenance.OBSERVED_EXTERNAL, RULE_WEIGHTS["HTTPS_TO_HTTP_DOWNGRADE"],
+                f"Initial host: {redirect.data.get('initial_host')}; final host: {redirect.data.get('final_host')}.",
+            ))
+        if redirect.data.get("cross_domain_redirect"):
+            findings.append(_make_finding(
+                "CROSS_DOMAIN_REDIRECT",
+                "The submitted link redirects to a different hostname. This can be legitimate, but the final destination should be checked independently.",
+                RiskLevel.MEDIUM, EvidenceProvenance.OBSERVED_EXTERNAL, RULE_WEIGHTS["CROSS_DOMAIN_REDIRECT"],
+                f"Initial host: {redirect.data.get('initial_host')}; final host: {redirect.data.get('final_host')}; hops: {redirect.data.get('redirect_hops', [])[:5]}.",
+            ))
+
+    # Pasted email authentication headers are user-provided claims, not
+    # cryptographic verification. Report failures as caution, not proof.
+    for header_result in (item for item in tool_results if item.tool_name == "email_authentication_headers"):
+        if header_result.status != "SUCCESS":
+            continue
+        methods = []
+        for auth in header_result.data.get("authentication_results") or []:
+            methods.extend(auth.get("methods") or [])
+        methods.extend({"method": "spf", "result": item.get("result")} for item in header_result.data.get("received_spf_results") or [])
+        failures = [item for item in methods if str(item.get("result", "")).lower() in {"fail", "softfail", "permerror", "temperror"}]
+        if failures:
+            findings.append(_make_finding(
+                "EMAIL_AUTHENTICATION_FAILURE_CLAIM",
+                "The pasted email headers contain SPF, DKIM, or DMARC failure claims. These header values were not independently authenticated.",
+                RiskLevel.MEDIUM, EvidenceProvenance.USER_PROVIDED, RULE_WEIGHTS["EMAIL_AUTHENTICATION_FAILURE_CLAIM"],
+                f"Header claims: {failures[:10]}; source: user-pasted email headers.",
+            ))
 
     # Domain age and historical matches are contextual signals, not proof.
     domain_results = [item for item in tool_results if item.tool_name == "domain_intelligence"]

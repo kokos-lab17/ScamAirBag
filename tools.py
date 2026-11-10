@@ -205,10 +205,45 @@ def tool_paypal_subscription(subscription_id: str) -> ToolExecutionResult:
         )
         subscriber = sub.get("subscriber") or {}
         billing = sub.get("billing_info") or {}
+        plan_id = sub.get("plan_id")
+        plan_summary: Dict[str, Any] = {"plan_details_status": "NOT_AVAILABLE"}
+        if isinstance(plan_id, str) and plan_id:
+            try:
+                plan = _paypal_get(f"/v1/billing/plans/{_validate_identifier(plan_id)}")
+                cycles = []
+                for cycle in plan.get("billing_cycles") or []:
+                    frequency = cycle.get("frequency") or {}
+                    pricing = cycle.get("pricing_scheme") or {}
+                    fixed_price = pricing.get("fixed_price") or {}
+                    cycles.append({
+                        "tenure_type": cycle.get("tenure_type"),
+                        "sequence": cycle.get("sequence"),
+                        "total_cycles": cycle.get("total_cycles"),
+                        "interval_unit": frequency.get("interval_unit"),
+                        "interval_count": frequency.get("interval_count"),
+                        "price_value": fixed_price.get("value"),
+                        "currency_code": fixed_price.get("currency_code"),
+                    })
+                plan_summary = {
+                    "plan_details_status": "VERIFIED",
+                    "plan_name": plan.get("name"),
+                    "plan_status": plan.get("status"),
+                    "product_id": plan.get("product_id"),
+                    "billing_cycles": cycles,
+                    "auto_bill_outstanding": (plan.get("payment_preferences") or {}).get("auto_bill_outstanding"),
+                    "setup_fee": (plan.get("payment_preferences") or {}).get("setup_fee"),
+                    "taxes": plan.get("taxes"),
+                }
+            except Exception as plan_exc:
+                plan_summary = {
+                    "plan_details_status": "UNAVAILABLE",
+                    "plan_error_code": _paypal_failure("paypal_subscription_plan", plan_exc).error_code,
+                }
         data = {
             "subscription_id": sub.get("id"),
             "status": sub.get("status"),
-            "plan_id": sub.get("plan_id"),
+            "plan_id": plan_id,
+            **plan_summary,
             "subscriber_name": subscriber.get("name"),
             "subscriber_email": subscriber.get("email_address"),
             "start_time": sub.get("start_time"),
@@ -216,6 +251,8 @@ def tool_paypal_subscription(subscription_id: str) -> ToolExecutionResult:
             "update_time": sub.get("update_time"),
             "next_billing_time": billing.get("next_billing_time"),
             "failed_payments_count": billing.get("failed_payments_count"),
+            "outstanding_balance": billing.get("outstanding_balance"),
+            "last_payment": billing.get("last_payment"),
             "cycle_executions": billing.get("cycle_executions") or [],
         }
         return _result(name, "SUCCESS", EvidenceProvenance.VERIFIED_PAYPAL, data)
@@ -306,7 +343,7 @@ def _generate_with_model_fallback(client: Any, *, contents: Any, config: Any) ->
         except Exception as exc:
             last_error = exc
             status = _gemini_status_code(exc)
-            if index == len(models) - 1 or status not in {500, 502, 503, 504}:
+            if index == len(models) - 1 or status not in {429, 500, 502, 503, 504}:
                 raise
     if last_error:
         raise last_error
@@ -365,7 +402,11 @@ SECURITY:
 - Do not treat claims as verified facts.
 - Never invent names, email addresses, identifiers, domains, URLs, or quotations.
 - Extract only information explicitly present or strongly indicated.
-- Include short verbatim quotes supporting coercion or unusual payment instructions.
+- Include short verbatim quotes supporting coercion, unusual payment instructions, and any extracted payment amount.
+- Extract a claimed_amount only when an explicit amount is present. Preserve decimal precision as a string (for example "125.50").
+- Extract claimed_currency_code only when the currency is explicitly stated or the symbol is unambiguous. Never guess currency from geography.
+- claimed_amount_quote must be an exact substring of the supplied message and must include the amount/currency context.
+- Do not treat an order total or invoice total as matching if currencies differ.
 - Urgency is a pressure indicator, not a fraud verdict.
 
 LINK ANALYSIS:
@@ -617,6 +658,8 @@ def tool_link_redirect_inspection(url: str) -> ToolExecutionResult:
     name = "link_redirect_inspection"
     try:
         current = url.strip()
+        if current.lower().startswith("www."):
+            current = "https://" + current
         parsed = urlsplit(current)
         if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
             raise ValueError("A complete HTTP or HTTPS URL is required.")

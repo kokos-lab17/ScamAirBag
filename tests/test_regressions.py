@@ -745,3 +745,575 @@ def test_watchtower_registers_paypal_webhook_and_persists_id(tmp_path, monkeypat
     assert captured["json"]["url"] == "https://scamairbag.example/api/v1/watchtower/paypal/webhook"
     assert "CHECKOUT.ORDER.APPROVED" in [item["name"] for item in captured["json"]["event_types"]]
     assert watchtower._get_setting("PAYPAL_WEBHOOK_ID") == "WH-REGISTERED"
+
+
+def test_raw_email_headers_are_not_included_in_model_context():
+    from agent import _model_input_context
+
+    request = InvestigationInput(
+        user_text="Please check this payment request.",
+        email_headers="From: private-sender@example.com\\nAuthentication-Results: private-auth-value",
+    )
+    model_context = _model_input_context(request)
+    assert model_context["user_text"] == "Please check this payment request."
+    assert "private-sender@example.com" not in str(model_context)
+    assert "private-auth-value" not in str(model_context)
+    assert "PARSED LOCALLY" in model_context["email_headers"]
+
+
+def test_evidence_manifest_hashes_and_detects_tampering():
+    from evidence_manifest import build_evidence_manifest, verify_evidence_manifest
+
+    trace = InvestigationTrace(
+        input_context=InvestigationInput(user_text="Invoice INV-123"),
+        steps=[InvestigationStep(
+            step_number=1,
+            decision=AgentDecision(action="CALL_TOOL", selected_tool="paypal_invoice",
+                                   rationale="Verify invoice", arguments={"invoice_id": "INV-123"}),
+            result=ToolExecutionResult(
+                tool_name="paypal_invoice", status="SUCCESS",
+                provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+                data={"invoice_id": "INV-123", "status": "SENT",
+                      "seller_email": "seller@example.com",
+                      "private_memo": "MUST NOT BE IN MANIFEST",
+                      "amount": {"value": "100.00", "currency_code": "USD"}},
+            ),
+        )],
+    )
+    manifest = build_evidence_manifest(trace)
+    assert verify_evidence_manifest(manifest)["valid"] is True
+    assert "MUST NOT BE IN MANIFEST" not in str(manifest)
+    manifest["evidence_records"][0]["evidence"]["status"] = "PAID"
+    verified = verify_evidence_manifest(manifest)
+    assert verified["valid"] is False
+    assert any("hash mismatch" in error for error in verified["errors"])
+
+
+def test_evidence_manifest_is_in_public_investigation_response():
+    trace = InvestigationTrace(input_context=InvestigationInput(user_text="Check this invoice"))
+    public = main._public_trace(trace)
+    assert public["evidence_manifest"]["manifest_version"] == "1.0"
+    assert len(public["evidence_manifest"]["root_sha256"]) == 64
+    assert "not a digital signature" in public["evidence_manifest"]["integrity_note"]
+
+
+def test_evidence_manifest_verification_endpoint_accepts_valid_manifest():
+    from fastapi.testclient import TestClient
+    from evidence_manifest import build_evidence_manifest
+
+    manifest = build_evidence_manifest(
+        InvestigationTrace(input_context=InvestigationInput(user_text="test"))
+    )
+    response = TestClient(main.app).post("/api/v1/evidence/verify", json={"manifest": manifest})
+    assert response.status_code == 200
+    assert response.json()["valid"] is True
+
+
+def test_claimed_amount_mismatch_against_verified_invoice_is_scored():
+    from scoring import score_investigation
+
+    entities = ExtractedEntities(
+        claimed_amount="125.00", claimed_currency_code="USD",
+        claimed_amount_quote="Pay USD 125.00 today",
+    )
+    invoice = ToolExecutionResult(
+        tool_name="paypal_invoice", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"amount": {"value": "100.00", "currency_code": "USD"}},
+    )
+    scorecard, _ = score_investigation(
+        InvestigationInput(user_text="Please Pay USD 125.00 today"),
+        entities, [invoice],
+    )
+    mismatch = next(item for item in scorecard.findings if item.rule_id == "PAYMENT_AMOUNT_MISMATCH")
+    assert mismatch.risk_impact == 40
+    assert mismatch.provenance == EvidenceProvenance.VERIFIED_PAYPAL
+
+
+def test_claimed_amount_is_not_compared_without_exact_supporting_quote():
+    from scoring import score_investigation
+
+    entities = ExtractedEntities(
+        claimed_amount="125.00", claimed_currency_code="USD",
+        claimed_amount_quote="Pay USD 125.00 today",
+    )
+    invoice = ToolExecutionResult(
+        tool_name="paypal_invoice", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"amount": {"value": "100.00", "currency_code": "USD"}},
+    )
+    scorecard, _ = score_investigation(
+        InvestigationInput(user_text="Pay USD 999.00 today"),
+        entities, [invoice],
+    )
+    assert not any(item.rule_id == "PAYMENT_AMOUNT_MISMATCH" for item in scorecard.findings)
+    assert any("verbatim supporting quote" in item for item in scorecard.unverified_claims)
+
+
+def test_claimed_amount_currency_must_match_before_comparison():
+    from scoring import _compare_claimed_amount
+
+    entities = ExtractedEntities(
+        claimed_amount="100", claimed_currency_code="EUR",
+        claimed_amount_quote="Pay EUR 100",
+    )
+    invoice = ToolExecutionResult(
+        tool_name="paypal_invoice", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"amount": {"value": "100.00", "currency_code": "USD"}},
+    )
+    match, reason = _compare_claimed_amount(entities, [invoice], "Pay EUR 100")
+    assert match is None
+    assert "No verified PayPal invoice/order amount in EUR" in reason
+
+
+def test_lookalike_domain_generates_explainable_caution_finding():
+    from scoring import _build_findings
+
+    result = ToolExecutionResult(
+        tool_name="domain_intelligence", status="SUCCESS",
+        provenance=EvidenceProvenance.OBSERVED_EXTERNAL,
+        data={"domain": "paypa1.com", "lookalike_observation": tools._lookalike_domain_observation("paypa1.com")},
+    )
+    findings, _ = _build_findings(None, [result])
+    finding = next(item for item in findings if item.rule_id == "POTENTIAL_BRAND_LOOKALIKE")
+    assert finding.risk_impact == 20
+    assert "not proof" in finding.description
+
+
+def test_https_downgrade_and_cross_domain_redirect_are_scored_separately():
+    from scoring import _build_findings
+
+    result = ToolExecutionResult(
+        tool_name="link_redirect_inspection", status="SUCCESS",
+        provenance=EvidenceProvenance.OBSERVED_EXTERNAL,
+        data={"initial_host": "short.example", "final_host": "destination.example",
+              "cross_domain_redirect": True, "https_downgrade": True,
+              "redirect_hops": [{"host": "short.example", "status_code": 302}]},
+    )
+    findings, _ = _build_findings(None, [result])
+    rules = {item.rule_id for item in findings}
+    assert "HTTPS_TO_HTTP_DOWNGRADE" in rules
+    assert "CROSS_DOMAIN_REDIRECT" in rules
+
+
+def test_pasted_email_authentication_failure_is_not_misrepresented_as_verified():
+    from scoring import _build_findings
+
+    result = ToolExecutionResult(
+        tool_name="email_authentication_headers", status="SUCCESS",
+        provenance=EvidenceProvenance.USER_PROVIDED,
+        data={"authentication_results": [{"methods": [{"method": "dmarc", "result": "fail"}]}]},
+    )
+    findings, _ = _build_findings(None, [result])
+    finding = next(item for item in findings if item.rule_id == "EMAIL_AUTHENTICATION_FAILURE_CLAIM")
+    assert finding.provenance == EvidenceProvenance.USER_PROVIDED
+    assert finding.risk_impact == 10
+
+
+def test_agent_rejects_model_invented_external_domains():
+    assert not agent._tool_target_is_grounded(
+        "domain_intelligence", {"domain_or_url": "attacker.example"},
+        InvestigationInput(user_text="Please check https://paypal.com/login"), [],
+    )
+    assert agent._tool_target_is_grounded(
+        "domain_intelligence", {"domain_or_url": "paypal.com"},
+        InvestigationInput(user_text="Please check https://paypal.com/login"), [],
+    )
+
+
+def test_agent_only_inspects_exact_user_supplied_redirect_urls():
+    request = InvestigationInput(user_text="Open https://short.example/path")
+    assert agent._tool_target_is_grounded(
+        "link_redirect_inspection", {"url": "https://short.example/path"}, request, []
+    )
+    assert not agent._tool_target_is_grounded(
+        "link_redirect_inspection", {"url": "https://attacker.example/path"}, request, []
+    )
+
+
+def test_agent_can_inspect_domain_returned_by_verified_paypal_seller():
+    paypal = ToolExecutionResult(
+        tool_name="paypal_invoice", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"seller_email": "merchant@verified-seller.example"},
+    )
+    assert agent._tool_target_is_grounded(
+        "domain_intelligence", {"domain_or_url": "verified-seller.example"},
+        InvestigationInput(identifier="INV-1", identifier_hint="INVOICE"), [paypal],
+    )
+
+
+def test_evidence_manifest_metadata_is_covered_by_root_hash():
+    from evidence_manifest import build_evidence_manifest, verify_evidence_manifest
+
+    manifest = build_evidence_manifest(
+        InvestigationTrace(input_context=InvestigationInput(user_text="test"))
+    )
+    manifest["created_at"] = "2000-01-01T00:00:00+00:00"
+    assert verify_evidence_manifest(manifest)["valid"] is False
+
+
+def test_production_investigation_requires_service_token(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "APP_ENV", "production")
+    monkeypatch.setenv("WATCHTOWER_INGEST_TOKEN", "production-test-token")
+    monkeypatch.delenv("SCAM_AIRBAG_API_TOKEN", raising=False)
+    client = TestClient(main.app)
+    denied = client.post("/api/v1/investigate", json={"user_text": "test"})
+    assert denied.status_code == 401
+    allowed = client.post(
+        "/api/v1/investigate", json={"user_text": "test"},
+        headers={"X-Watchtower-Token": "production-test-token"},
+    )
+    # The request passes the auth middleware and reaches normal validation/runtime.
+    assert allowed.status_code != 401
+
+
+def test_production_investigation_fails_closed_without_configured_token(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "APP_ENV", "production")
+    monkeypatch.delenv("WATCHTOWER_INGEST_TOKEN", raising=False)
+    monkeypatch.delenv("SCAM_AIRBAG_API_TOKEN", raising=False)
+    response = TestClient(main.app).post(
+        "/api/v1/investigate", json={"user_text": "test"}
+    )
+    assert response.status_code == 503
+    assert "not been configured" in response.json()["detail"]
+
+
+def test_direct_verified_paypal_lookup_is_preserved_when_gemini_is_unavailable(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(agent, "run_tool", lambda name, args: ToolExecutionResult(
+        tool_name=name, status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"invoice_id": args.get("invoice_id"), "status": "SENT",
+              "amount": {"value": "10.00", "currency_code": "USD"}},
+    ))
+    trace = agent.run_investigation(
+        InvestigationInput(identifier="INV-123", identifier_hint="INVOICE")
+    )
+    assert trace.status == "PARTIAL"
+    assert trace.error_code == "GEMINI_API_KEY_MISSING"
+    assert trace.final_scorecard is not None
+    assert any(item.source_name == "paypal_invoice" and item.status == "SUCCESS"
+               for item in trace.source_outcomes)
+
+
+def test_production_investigation_rate_limit_is_enforced(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "APP_ENV", "production")
+    monkeypatch.setattr(main, "INVESTIGATION_RATE_LIMIT_PER_MINUTE", 1)
+    main._rate_windows.clear()
+    monkeypatch.setenv("WATCHTOWER_INGEST_TOKEN", "rate-test-token")
+    monkeypatch.delenv("SCAM_AIRBAG_API_TOKEN", raising=False)
+    client = TestClient(main.app)
+    headers = {"X-Watchtower-Token": "rate-test-token"}
+    first = client.post("/api/v1/investigate", json={"user_text": "first"}, headers=headers)
+    second = client.post("/api/v1/investigate", json={"user_text": "second"}, headers=headers)
+    assert first.status_code != 401
+    assert second.status_code == 429
+    assert second.headers["Retry-After"]
+
+
+def test_production_investigation_rejects_oversized_body(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "APP_ENV", "production")
+    monkeypatch.setenv("WATCHTOWER_INGEST_TOKEN", "size-test-token")
+    monkeypatch.delenv("SCAM_AIRBAG_API_TOKEN", raising=False)
+    response = TestClient(main.app).post(
+        "/api/v1/investigate",
+        content='{"user_text":"' + ("x" * 41000) + '"}',
+        headers={"Content-Type": "application/json", "X-Watchtower-Token": "size-test-token"},
+    )
+    assert response.status_code == 413
+
+
+def test_paypal_subscription_includes_verified_recurring_plan_price(monkeypatch):
+    def fake_get(path):
+        if path.endswith("/subscriptions/I-SUB-123"):
+            return {
+                "id": "I-SUB-123", "status": "ACTIVE", "plan_id": "P-PLAN-123",
+                "subscriber": {"email_address": "payer@example.com"},
+                "billing_info": {"next_billing_time": "2027-01-01T00:00:00Z",
+                                 "failed_payments_count": 0},
+            }
+        assert path.endswith("/plans/P-PLAN-123")
+        return {
+            "id": "P-PLAN-123", "name": "Monthly service", "status": "ACTIVE",
+            "billing_cycles": [{
+                "tenure_type": "REGULAR", "sequence": 1, "total_cycles": 0,
+                "frequency": {"interval_unit": "MONTH", "interval_count": 1},
+                "pricing_scheme": {"fixed_price": {"value": "19.99", "currency_code": "USD"}},
+            }],
+        }
+    monkeypatch.setattr(tools, "_paypal_get", fake_get)
+    result = tools.tool_paypal_subscription("I-SUB-123")
+    assert result.status == "SUCCESS"
+    assert result.provenance == EvidenceProvenance.VERIFIED_PAYPAL
+    assert result.data["plan_name"] == "Monthly service"
+    assert result.data["billing_cycles"][0]["price_value"] == "19.99"
+    assert result.data["billing_cycles"][0]["currency_code"] == "USD"
+    assert result.data["next_billing_time"] == "2027-01-01T00:00:00Z"
+
+
+def test_public_trace_exposes_minimized_paypal_plan_evidence_not_private_payer_email():
+    trace = InvestigationTrace(
+        input_context=InvestigationInput(identifier="I-SUB-123", identifier_hint="SUBSCRIPTION"),
+        steps=[InvestigationStep(
+            step_number=1,
+            decision=AgentDecision(action="CALL_TOOL", selected_tool="paypal_subscription",
+                                   rationale="Verify recurring plan", arguments={"subscription_id": "I-SUB-123"}),
+            result=ToolExecutionResult(
+                tool_name="paypal_subscription", status="SUCCESS",
+                provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+                data={"subscription_id": "I-SUB-123", "plan_name": "Monthly service",
+                      "billing_cycles": [{"price_value": "19.99", "currency_code": "USD"}],
+                      "subscriber_email": "private-payer@example.com"},
+            ),
+        )],
+    )
+    public = main._public_trace(trace)
+    assert public["paypal_evidence"][0]["evidence"]["plan_name"] == "Monthly service"
+    assert "private-payer@example.com" not in str(public)
+
+
+def test_subscription_plan_pricing_is_a_separate_applicable_coverage_check():
+    subscription = ToolExecutionResult(
+        tool_name="paypal_subscription", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"subscription_id": "I-SUB-123", "status": "ACTIVE",
+              "plan_details_status": "UNAVAILABLE", "plan_error_code": "PAYPAL_HTTP_403"},
+    )
+    outcomes = build_source_outcomes(
+        InvestigationInput(identifier="I-SUB-123", identifier_hint="SUBSCRIPTION"),
+        None, [subscription],
+    )
+    plan = next(item for item in outcomes if item.source_name == "paypal_subscription_plan")
+    assert plan.applicable is True
+    assert plan.status == "FAILED"
+    assert plan.error_code == "PAYPAL_HTTP_403"
+
+
+def test_amount_comparison_rejects_quote_with_different_numeric_value():
+    from scoring import _compare_claimed_amount
+
+    entities = ExtractedEntities(
+        claimed_amount="125.00", claimed_currency_code="USD",
+        claimed_amount_quote="pay USD 100.00 today",
+    )
+    invoice = ToolExecutionResult(
+        tool_name="paypal_invoice", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"amount": {"value": "100.00", "currency_code": "USD"}},
+    )
+    match, reason = _compare_claimed_amount(entities, [invoice], "Please pay USD 100.00 today")
+    assert match is None
+    assert "does not match" in reason
+
+
+def test_amount_comparison_does_not_guess_currency_from_dollar_symbol():
+    from scoring import _compare_claimed_amount
+
+    entities = ExtractedEntities(
+        claimed_amount="100.00", claimed_currency_code="USD",
+        claimed_amount_quote="pay $100.00 today",
+    )
+    invoice = ToolExecutionResult(
+        tool_name="paypal_invoice", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"amount": {"value": "100.00", "currency_code": "USD"}},
+    )
+    match, reason = _compare_claimed_amount(entities, [invoice], "Please pay $100.00 today")
+    assert match is None
+    assert "does not establish" in reason
+
+
+def test_amount_comparison_accepts_unambiguous_rupee_symbol():
+    from scoring import _compare_claimed_amount
+
+    entities = ExtractedEntities(
+        claimed_amount="100.00", claimed_currency_code="INR",
+        claimed_amount_quote="pay ₹100.00 today",
+    )
+    invoice = ToolExecutionResult(
+        tool_name="paypal_invoice", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"amount": {"value": "100.00", "currency_code": "INR"}},
+    )
+    match, _ = _compare_claimed_amount(entities, [invoice], "Please pay ₹100.00 today")
+    assert match is True
+
+
+def test_evidence_manifest_server_hmac_signature_detects_recomputed_tampering():
+    from evidence_manifest import build_evidence_manifest, verify_evidence_manifest
+
+    trace = InvestigationTrace(input_context=InvestigationInput(user_text="Check invoice"))
+    manifest = build_evidence_manifest(trace, signing_key="server-signing-secret")
+    verified = verify_evidence_manifest(manifest, signing_key="server-signing-secret")
+    assert verified["valid"] is True
+    assert verified["signature_status"] == "VERIFIED"
+
+    # An attacker can recompute plain SHA-256 fields but cannot forge the server HMAC.
+    manifest["evidence_records"].append({
+        "evidence_id": "EV-999", "tool_name": "paypal_invoice",
+        "status": "SUCCESS", "provenance": "VERIFIED_PAYPAL",
+        "error_code": None, "evidence": {"status": "PAID"},
+        "sha256": "0" * 64,
+    })
+    from evidence_manifest import sha256_json
+    record = manifest["evidence_records"][-1]
+    record["sha256"] = sha256_json({
+        key: value for key, value in record.items() if key not in {"evidence_id", "sha256"}
+    })
+    # Update the root without the signing key: the HMAC must still fail.
+    root_payload = {
+        "manifest_version": manifest["manifest_version"],
+        "created_at": manifest["created_at"],
+        "investigation_status": manifest["investigation_status"],
+        "integrity_note": manifest["integrity_note"],
+        "evidence_records": [item["sha256"] for item in manifest["evidence_records"]],
+        "findings": [item["sha256"] for item in manifest["findings"]],
+    }
+    manifest["root_sha256"] = sha256_json(root_payload)
+    rejected = verify_evidence_manifest(manifest, signing_key="server-signing-secret")
+    assert rejected["valid"] is False
+    assert rejected["signature_status"] == "INVALID"
+
+
+def test_signed_manifest_cannot_be_verified_without_server_key():
+    from evidence_manifest import build_evidence_manifest, verify_evidence_manifest
+
+    manifest = build_evidence_manifest(
+        InvestigationTrace(input_context=InvestigationInput(user_text="test")),
+        signing_key="private-key",
+    )
+    result = verify_evidence_manifest(manifest)
+    assert result["valid"] is False
+    assert result["signature_status"] == "UNVERIFIABLE"
+
+
+def test_readiness_reports_missing_production_dependencies_without_secrets(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "APP_ENV", "production")
+    for key in ("GEMINI_API_KEY", "PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET",
+                "SCAM_AIRBAG_API_TOKEN", "WATCHTOWER_INGEST_TOKEN", "EVIDENCE_SIGNING_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WATCHTOWER_DB_PATH", str(tmp_path / "watchtower.sqlite3"))
+    response = TestClient(main.app).get("/ready")
+    assert response.status_code == 503
+    assert response.json()["status"] == "degraded"
+    assert response.json()["checks"]["gemini_configured"] is False
+    assert "secret" not in str(response.json()).lower()
+
+
+def test_readiness_reports_configured_service_without_leaking_secret_values(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "APP_ENV", "production")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-secret")
+    monkeypatch.setenv("PAYPAL_CLIENT_ID", "test-paypal-client")
+    monkeypatch.setenv("PAYPAL_CLIENT_SECRET", "test-paypal-secret")
+    monkeypatch.setenv("SCAM_AIRBAG_API_TOKEN", "test-service-token")
+    monkeypatch.setenv("WATCHTOWER_DB_PATH", str(tmp_path / "watchtower.sqlite3"))
+    response = TestClient(main.app).get("/ready")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+    assert "test-gemini-secret" not in response.text
+    assert "test-paypal-secret" not in response.text
+
+
+def test_agent_rejects_duplicate_evidence_requests_but_allows_new_targets():
+    first = InvestigationStep(
+        step_number=1,
+        decision=AgentDecision(
+            action="CALL_TOOL", selected_tool="domain_intelligence",
+            rationale="Check the submitted domain", arguments={"domain_or_url": "https://example.com/path"},
+        ),
+        result=ToolExecutionResult(
+            tool_name="domain_intelligence", status="FAILED",
+            provenance=EvidenceProvenance.UNAVAILABLE,
+        ),
+    )
+    assert agent._tool_call_already_attempted(
+        "domain_intelligence", {"domain_or_url": "example.com"}, [first]
+    )
+    assert not agent._tool_call_already_attempted(
+        "domain_intelligence", {"domain_or_url": "different.example"}, [first]
+    )
+
+
+def test_agent_stops_cleanly_when_client_disconnects_before_work_starts(monkeypatch):
+    import threading
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    cancel = threading.Event()
+    cancel.set()
+    trace = agent.run_investigation(
+        InvestigationInput(user_text="Please inspect this request"),
+        cancel_event=cancel,
+    )
+    assert trace.status == "PARTIAL"
+    assert trace.error_code == "CLIENT_DISCONNECTED"
+    assert trace.steps == []
+    assert trace.final_scorecard is not None
+
+
+def test_production_cors_preflight_is_not_blocked_by_service_token_middleware(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "APP_ENV", "production")
+    monkeypatch.delenv("SCAM_AIRBAG_API_TOKEN", raising=False)
+    monkeypatch.delenv("WATCHTOWER_INGEST_TOKEN", raising=False)
+    response = TestClient(main.app).options(
+        "/api/v1/investigate/stream",
+        headers={
+            "Origin": "https://scamairbag-web-sqh8.onrender.com",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-watchtower-token",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://scamairbag-web-sqh8.onrender.com"
+
+
+def test_evidence_manifest_never_exports_full_url_paths_or_query_tokens():
+    from evidence_manifest import build_evidence_manifest
+
+    trace = InvestigationTrace(
+        input_context=InvestigationInput(user_text="Please inspect this link"),
+        steps=[InvestigationStep(
+            step_number=1,
+            decision=AgentDecision(action="CALL_TOOL", selected_tool="extract_message_context",
+                                   rationale="Extract links", arguments={"user_text": "Please inspect this link"}),
+            result=ToolExecutionResult(
+                tool_name="extract_message_context", status="SUCCESS",
+                provenance=EvidenceProvenance.AI_INFERRED,
+                data={"entities": {
+                    "detected_urls": ["https://example.com/private/path?token=do-not-export"],
+                    "detected_domains": ["example.com"],
+                    "claimed_amount": None,
+                }},
+            ),
+        )],
+    )
+    manifest = build_evidence_manifest(trace)
+    serialized = str(manifest)
+    assert "do-not-export" not in serialized
+    assert "/private/path" not in serialized
+    assert "example.com" in serialized
+
+
+def test_investigation_request_rejects_unexpected_fields():
+    from fastapi.testclient import TestClient
+
+    response = TestClient(main.app).post(
+        "/api/v1/investigate",
+        json={"user_text": "check this", "unrecognized_extra": "unexpected"},
+    )
+    assert response.status_code == 422
