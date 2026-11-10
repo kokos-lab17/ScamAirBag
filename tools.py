@@ -685,7 +685,7 @@ def tool_link_redirect_inspection(url: str) -> ToolExecutionResult:
 _KNOWN_BRAND_DOMAINS = (
     "paypal.com", "google.com", "microsoft.com", "apple.com",
     "amazon.com", "netflix.com", "facebook.com", "instagram.com",
-    "whatsapp.com", " ebay.com".strip(), "adobe.com", "linkedin.com",
+    "whatsapp.com", "ebay.com", "adobe.com", "linkedin.com",
     "dropbox.com", "docusign.com",
 )
 
