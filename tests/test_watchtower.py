@@ -9,6 +9,7 @@ def _client(monkeypatch, tmp_path):
     monkeypatch.setattr(watchtower, "_DB_PATH", str(tmp_path / "watchtower.sqlite3"))
     monkeypatch.setattr(watchtower, "_INGEST_TOKEN", "test-watchtower-token")
     monkeypatch.setattr(watchtower, "_schedule", lambda event_id, public_trace: None)
+    watchtower.init_watchtower()
     return TestClient(main.app)
 
 
@@ -61,3 +62,16 @@ def test_watchtower_ingest_is_authenticated_and_idempotent(monkeypatch, tmp_path
     history = client.get("/api/v1/watchtower/events", headers=headers)
     assert history.status_code == 200
     assert len(history.json()["events"]) == 1
+
+
+def test_redirect_tool_contract_accepts_url_argument():
+    from agent import _parse_decision
+
+    decision = _parse_decision({
+        "action": "CALL_TOOL",
+        "selected_tool": "link_redirect_inspection",
+        "rationale": "Inspect the submitted link redirect chain.",
+        "arguments": {"url": "https://example.com/pay"},
+    })
+    assert decision.selected_tool == "link_redirect_inspection"
+    assert decision.arguments["url"] == "https://example.com/pay"
