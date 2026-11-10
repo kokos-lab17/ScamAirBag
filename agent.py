@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from schemas import (
@@ -54,7 +55,8 @@ logger = logging.getLogger(__name__)
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash")
 MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "12"))
-MAX_MODEL_TURNS = int(os.getenv("MAX_MODEL_TURNS", "24"))
+MAX_MODEL_TURNS = int(os.getenv("MAX_MODEL_TURNS", "10"))
+MAX_INVESTIGATION_SECONDS = float(os.getenv("MAX_INVESTIGATION_SECONDS", "180"))
 
 
 def _fallback_model_name(active_model: str) -> str:
@@ -229,6 +231,7 @@ def _decision_function_declaration(types: Any) -> Any:
                     "order_id": {"type": "STRING"},
                     "subscription_id": {"type": "STRING"},
                     "domain_or_url": {"type": "STRING"},
+                    "url": {"type": "STRING"},
                 },
                 "additionalProperties": False,
             },
@@ -272,6 +275,7 @@ def _parse_decision(arguments: Any) -> AgentDecision:
             "domain_intelligence": "domain_or_url",
             "historical_pattern_search": "domain_or_url",
             "threat_intelligence": "domain_or_url",
+            "link_redirect_inspection": "url",
         }[decision.selected_tool]
         if not decision.arguments.get(required):
             raise ValueError(f"Missing required argument: {required}")
@@ -525,6 +529,7 @@ def run_investigation(
     input_context = request
     trace = InvestigationTrace(input_context=input_context, status="PARTIAL")
     investigation_completed = False
+    started_at = time.monotonic()
     results: List[ToolExecutionResult] = []
     extracted: Optional[ExtractedEntities] = None
     feedback: Optional[str] = None
@@ -661,6 +666,10 @@ def run_investigation(
         ]
 
         for model_turn in range(MAX_MODEL_TURNS):
+            if time.monotonic() - started_at >= MAX_INVESTIGATION_SECONDS:
+                trace.error_code = "AGENT_TIME_BUDGET_EXCEEDED"
+                feedback = "The investigation time budget is exhausted. Finish with the evidence collected and clearly state what remains unverified."
+                break
             if len(results) >= MAX_TOOL_CALLS:
                 feedback = (
                     "The tool-call budget is exhausted. Finish now and clearly "
