@@ -183,7 +183,8 @@ async def require_service_token_for_investigations(request: Request, call_next):
         "/api/v1/investigate/stream",
         "/api/v1/evidence/verify",
     }
-    if APP_ENV in {"production", "prod"} and request.url.path in protected:
+    if (APP_ENV in {"production", "prod"} and request.method != "OPTIONS"
+            and request.url.path in protected):
         expected = os.getenv("SCAM_AIRBAG_API_TOKEN") or os.getenv("WATCHTOWER_INGEST_TOKEN")
         if not expected:
             return JSONResponse(
