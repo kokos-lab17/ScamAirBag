@@ -524,3 +524,45 @@ def test_watchtower_requires_secret_even_when_not_configured(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         watchtower._require_ingest_token(None)
     assert exc.value.status_code == 401
+
+
+def test_watchtower_paypal_signature_verification_uses_paypal_verify_api(monkeypatch):
+    import watchtower
+
+    monkeypatch.setenv("PAYPAL_WEBHOOK_ID", "WH-TEST")
+    monkeypatch.setattr(watchtower, "_get_paypal_access_token", lambda: "oauth-token")
+    monkeypatch.setattr(watchtower, "PAYPAL_BASE_URL", "https://api-m.sandbox.paypal.com")
+    captured = {}
+    class Response:
+        def raise_for_status(self): pass
+        def json(self): return {"verification_status": "SUCCESS"}
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return Response()
+    monkeypatch.setattr(watchtower.requests, "post", fake_post)
+
+    verified = watchtower._verify_paypal_signature({
+        "paypal-transmission-id": "tx-1",
+        "paypal-transmission-time": "2026-11-10T10:00:00Z",
+        "paypal-cert-url": "https://api.paypal.com/cert",
+        "paypal-auth-algo": "SHA256withRSA",
+        "paypal-transmission-sig": "signature",
+    }, {"id": "WH-EVENT-1", "event_type": "INVOICING.INVOICE.SENT", "resource": {"id": "INV-1"}})
+
+    assert verified is True
+    assert captured["url"].endswith("/v1/notifications/verify-webhook-signature")
+    assert captured["headers"]["Authorization"] == "Bearer oauth-token"
+    assert captured["json"]["webhook_id"] == "WH-TEST"
+    assert captured["json"]["webhook_event"]["id"] == "WH-EVENT-1"
+
+
+def test_watchtower_event_creation_is_idempotent(tmp_path, monkeypatch):
+    import watchtower
+    monkeypatch.setattr(watchtower, "_DB_PATH", str(tmp_path / "watchtower.sqlite3"))
+    watchtower.init_watchtower()
+    first, duplicate_first = watchtower._create_event("event-1", "TEST", "INVOICE.CREATED", "INV-1", "INVOICE")
+    second, duplicate_second = watchtower._create_event("event-1", "TEST", "INVOICE.CREATED", "INV-1", "INVOICE")
+    assert duplicate_first is False
+    assert duplicate_second is True
+    assert first["event_id"] == second["event_id"]
