@@ -55,6 +55,19 @@ GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash")
 MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "12"))
 MAX_MODEL_TURNS = int(os.getenv("MAX_MODEL_TURNS", "24"))
 
+
+def _fallback_model_name(active_model: str) -> str:
+    """Return a distinct, fast fallback even if env settings duplicate the primary."""
+    configured = GEMINI_FALLBACK_MODEL.strip()
+    if configured and configured != active_model:
+        return configured
+    # A duplicated primary/fallback setting silently disables fallback otherwise.
+    return (
+        "gemini-3.5-flash"
+        if active_model == "gemini-3.5-flash-lite"
+        else "gemini-3.5-flash-lite"
+    )
+
 # Tool contracts are intentionally narrow. The model can select only these
 # names and arguments; run_tool() independently enforces the same allowlist.
 TOOL_ARGUMENTS = {
@@ -582,16 +595,17 @@ def run_investigation(
                 except (TypeError, ValueError):
                     status_code = None
 
-                if status_code not in {500, 502, 503, 504} or active_model == GEMINI_FALLBACK_MODEL:
+                if status_code not in {500, 502, 503, 504}:
                     raise
 
+                fallback_model = _fallback_model_name(active_model)
                 logger.warning(
-                    "Primary Gemini model %s returned HTTP %s; switching to %s.",
+                    "Gemini model %s returned HTTP %s; switching to fallback %s.",
                     active_model,
                     status_code,
-                    GEMINI_FALLBACK_MODEL,
+                    fallback_model,
                 )
-                active_model = GEMINI_FALLBACK_MODEL
+                active_model = fallback_model
                 response = client.models.generate_content(
                     model=active_model,
                     contents=contents,
