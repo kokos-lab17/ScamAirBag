@@ -680,7 +680,7 @@
         const hint = $("identifierHint").value;
         if (identifier && hint === "UNKNOWN") { statusEl.textContent = "Choose the PayPal ID type."; statusEl.className = "status error"; return; }
         activeController?.abort(); activeController = new AbortController();
-        $("results").classList.remove("hidden"); $("timeline").replaceChildren();
+        $("results").classList.remove("hidden"); $("timeline").replaceChildren(); renderEvidenceManifest(null);
         $("summary").textContent = "Gathering evidence and checking applicable sources…";
         $("riskScore").textContent = "…"; $("recommendation").textContent = "Assessment pending";
         $("sources").textContent = "Waiting for source checks…"; renderDetail(null);
@@ -706,7 +706,7 @@
         if (gridApi) { gridApi.destroy(); gridApi = null; }
         $("timeline").replaceChildren(); $("sources").textContent = "Waiting for source checks.";
         $("findingCount").textContent = "0 findings"; $("findingsSearch").value = ""; renderDetail(null);
-        $("results").classList.add("hidden"); statusEl.textContent = "Ready when you are."; statusEl.className = "status";
+        $("results").classList.add("hidden"); renderEvidenceManifest(null); statusEl.textContent = "Ready when you are."; statusEl.className = "status";
       });
     })();
   </script>
