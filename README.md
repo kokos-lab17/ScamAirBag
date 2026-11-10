@@ -133,7 +133,7 @@ Watchtower adds an event intake path that can wake the existing investigation ag
 
 **Supported paths:**
 
-- **Verified PayPal Invoicing webhooks:** `POST /api/v1/watchtower/paypal/webhook` verifies the incoming transmission with PayPal's `/v1/notifications/verify-webhook-signature` API before trusting the event. The initial pre-payment allowlist includes invoice events `INVOICING.INVOICE.CREATED`, `INVOICING.INVOICE.SENT`, and `INVOICING.INVOICE.UPDATED`; order event `CHECKOUT.ORDER.APPROVED`; and subscription events `BILLING.SUBSCRIPTION.CREATED`, `BILLING.SUBSCRIPTION.ACTIVATED`, and `BILLING.SUBSCRIPTION.UPDATED`. A verified event automatically schedules the matching PayPal Sandbox invoice, order, or subscription lookup and investigation.
+- **Verified PayPal Invoicing webhooks:** `POST /api/v1/watchtower/paypal/webhook` verifies the incoming transmission with PayPal's `/v1/notifications/verify-webhook-signature` API before trusting the event. The initial pre-payment allowlist includes invoice events `INVOICING.INVOICE.CREATED`, `INVOICING.INVOICE.SENT`, and `INVOICING.INVOICE.UPDATED`; order event `CHECKOUT.ORDER.APPROVED`; and subscription lifecycle events `BILLING.SUBSCRIPTION.CREATED`, `BILLING.SUBSCRIPTION.ACTIVATED`, `BILLING.SUBSCRIPTION.UPDATED`, `BILLING.SUBSCRIPTION.SUSPENDED`, `BILLING.SUBSCRIPTION.CANCELLED`, and `BILLING.SUBSCRIPTION.EXPIRED`. A verified event automatically schedules the matching PayPal Sandbox invoice, order, or subscription lookup and investigation.
 - **Authenticated generic event intake:** `POST /api/v1/watchtower/events` requires the `X-Watchtower-Token` header matching `WATCHTOWER_INGEST_TOKEN`. The same token protects private event-history reads and the demo trigger; enter it in the Watchtower dashboard's access-token field. This is a trusted integration endpoint, not proof that the sender is PayPal.
 - **Explicit demo simulator:** `POST /api/v1/watchtower/demo/simulate-invoice` is available only when `WATCHTOWER_DEMO_ENABLED=true`. The dashboard labels this as simulated. The investigation still attempts a real Sandbox invoice lookup; no invoice facts are fabricated.
 
@@ -267,7 +267,7 @@ Import `postman/ScamAirbag.postman_collection.json` into Postman. Set `baseUrl` 
 ## Deployment security and operating boundary
 
 - Set `APP_ENV=production`. The Render blueprint does this and restricts CORS to the configured frontend origin.
-- Configure a long, random `SCAM_AIRBAG_API_TOKEN` or `WATCHTOWER_INGEST_TOKEN`. The frontend's Service token field sends it only in request headers. Do not place it in source code or commit it.
+- Configure a long, random `SCAM_AIRBAG_API_TOKEN` or `WATCHTOWER_INGEST_TOKEN`. The frontend's Service token field sends it only in request headers. Production requests are rate-limited per IP and bounded for request size and concurrent model calls. Do not place it in source code or commit it.
 - The current token is a **single-operator shared secret**, not multi-user identity, tenant isolation, or customer account authentication. Do not expose this deployment as a public multi-tenant service.
 - The current durable Watchtower runner is restart-recoverable but single-instance and in-process. Run one API instance and one Uvicorn worker; use an external durable queue and independently managed workers before horizontal scaling or high-availability claims.
 - Configure persistent disk storage and rotate secrets if they are exposed. Set retention/deletion policies appropriate to your deployment and obtain consent before enabling historical case contribution.
