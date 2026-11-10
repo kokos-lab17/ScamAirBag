@@ -52,6 +52,7 @@ class RecommendedAction(str, Enum):
 class InvestigationInput(BaseModel):
     """Captures initial user submission while preserving clear boundaries."""
     user_text: Optional[str] = Field(default=None, description="Untrusted message, email, or chat text")
+    email_headers: Optional[str] = Field(default=None, description="Optional raw email headers for authentication-result inspection")
     identifier: Optional[str] = Field(default=None, description="Transaction identifier (Invoice ID, Order ID, etc.)")
     identifier_hint: Optional[str] = Field(
         default=None,
