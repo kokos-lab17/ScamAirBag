@@ -16,6 +16,7 @@ router = APIRouter(prefix="/api/v1/watchtower", tags=["Watchtower"])
 _DB_PATH = os.getenv("WATCHTOWER_DB_PATH", "watchtower.sqlite3")
 _DEMO_ENABLED = os.getenv("WATCHTOWER_DEMO_ENABLED", "false").lower() in {"1","true","yes"}
 _INGEST_TOKEN = os.getenv("WATCHTOWER_INGEST_TOKEN", "")
+_WATCHTOWER_RETENTION_DAYS = max(1, min(3650, int(os.getenv("WATCHTOWER_RETENTION_DAYS", "90"))))
 _TASKS: set[asyncio.Task] = set()
 _WATCHTOWER_MAX_CONCURRENT = max(1, min(4, int(os.getenv("WATCHTOWER_MAX_CONCURRENT", "2"))))
 _WORKER_SEMAPHORE = asyncio.Semaphore(_WATCHTOWER_MAX_CONCURRENT)
@@ -48,6 +49,12 @@ def init_watchtower():
         completed_at TEXT, result_json TEXT, error_code TEXT)""")
         db.execute("CREATE INDEX IF NOT EXISTS idx_watchtower_received ON watchtower_events(received_at DESC)")
         db.execute("CREATE TABLE IF NOT EXISTS watchtower_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL)")
+        # Event records contain transaction identifiers and investigation evidence.
+        # Purge them after the configured retention window.
+        db.execute(
+            "DELETE FROM watchtower_events WHERE julianday(received_at) < julianday('now', ?)",
+            (f"-{_WATCHTOWER_RETENTION_DAYS} days",),
+        )
 
 def _get_setting(key: str) -> Optional[str]:
     with _db() as db:
@@ -119,6 +126,10 @@ def _require_ingest_token(token:Optional[str]):
 def _create_event(event_id,source,event_type,identifier,hint):
     now=_now()
     with _db() as db:
+        db.execute(
+            "DELETE FROM watchtower_events WHERE julianday(received_at) < julianday('now', ?)",
+            (f"-{_WATCHTOWER_RETENTION_DAYS} days",),
+        )
         cursor=db.execute("""INSERT OR IGNORE INTO watchtower_events
         (event_id,source,event_type,identifier,identifier_hint,status,received_at,updated_at)
         VALUES (?,?,?,?,?,'RECEIVED',?,?)""",(event_id,source,event_type,identifier,hint,now,now))
