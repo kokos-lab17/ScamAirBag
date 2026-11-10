@@ -1,7 +1,7 @@
 """Persistent event-driven Watchtower. Demo events are explicitly simulated."""
 from __future__ import annotations
 import asyncio, hmac, json, os, sqlite3, uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone\nfrom contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 from fastapi import APIRouter, Header, HTTPException
@@ -22,7 +22,7 @@ def _connect():
     db=sqlite3.connect(str(path),timeout=10); db.row_factory=sqlite3.Row; return db
 
 def init_watchtower():
-    with _connect() as db:
+    with _db() as db:
         db.execute("""CREATE TABLE IF NOT EXISTS watchtower_events (
         event_id TEXT PRIMARY KEY, source TEXT NOT NULL, event_type TEXT NOT NULL,
         identifier TEXT NOT NULL, identifier_hint TEXT NOT NULL, status TEXT NOT NULL,
