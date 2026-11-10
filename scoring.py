@@ -143,6 +143,28 @@ def _paypal_seller_email(
     return None, None
 
 
+def _paypal_seller_domains(tool_results: Sequence[ToolExecutionResult]) -> List[str]:
+    """Return domains from verified seller/payee fields, never subscription payer email."""
+    emails = []
+    invoice = _result_by_name(tool_results, "paypal_invoice")
+    if invoice and invoice.status == "SUCCESS":
+        email = _normalize_email(invoice.data.get("seller_email"))
+        if email:
+            emails.append(email)
+    order = _result_by_name(tool_results, "paypal_order")
+    if order and order.status == "SUCCESS":
+        for unit in order.data.get("purchase_units", []) or []:
+            email = _normalize_email(unit.get("payee_email"))
+            if email:
+                emails.append(email)
+    domains = []
+    for email in emails:
+        domain = email.rsplit("@", 1)[-1].lower().rstrip(".")
+        if domain and domain not in domains:
+            domains.append(domain)
+    return domains
+
+
 def _source_outcome(
     source_name: str,
     applicable: bool,
@@ -249,7 +271,7 @@ def build_source_outcomes(
             "NO_IDENTIFIER",
         ))
 
-    domains = list(dict.fromkeys(extracted_entities.detected_domains if extracted_entities else []))
+    domains = list(dict.fromkeys((extracted_entities.detected_domains if extracted_entities else []) + _paypal_seller_domains(tool_results)))
     if not domains:
         outcomes.append(_source_outcome(
             "domain_intelligence", False, "NOT_APPLICABLE", EvidenceProvenance.UNAVAILABLE,
