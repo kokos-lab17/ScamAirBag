@@ -1147,3 +1147,51 @@ def test_amount_comparison_accepts_unambiguous_rupee_symbol():
     )
     match, _ = _compare_claimed_amount(entities, [invoice], "Please pay ₹100.00 today")
     assert match is True
+
+
+def test_evidence_manifest_server_hmac_signature_detects_recomputed_tampering():
+    from evidence_manifest import build_evidence_manifest, verify_evidence_manifest
+
+    trace = InvestigationTrace(input_context=InvestigationInput(user_text="Check invoice"))
+    manifest = build_evidence_manifest(trace, signing_key="server-signing-secret")
+    verified = verify_evidence_manifest(manifest, signing_key="server-signing-secret")
+    assert verified["valid"] is True
+    assert verified["signature_status"] == "VERIFIED"
+
+    # An attacker can recompute plain SHA-256 fields but cannot forge the server HMAC.
+    manifest["evidence_records"].append({
+        "evidence_id": "EV-999", "tool_name": "paypal_invoice",
+        "status": "SUCCESS", "provenance": "VERIFIED_PAYPAL",
+        "error_code": None, "evidence": {"status": "PAID"},
+        "sha256": "0" * 64,
+    })
+    from evidence_manifest import sha256_json
+    record = manifest["evidence_records"][-1]
+    record["sha256"] = sha256_json({
+        key: value for key, value in record.items() if key not in {"evidence_id", "sha256"}
+    })
+    # Update the root without the signing key: the HMAC must still fail.
+    root_payload = {
+        "manifest_version": manifest["manifest_version"],
+        "created_at": manifest["created_at"],
+        "investigation_status": manifest["investigation_status"],
+        "integrity_note": manifest["integrity_note"],
+        "evidence_records": [item["sha256"] for item in manifest["evidence_records"]],
+        "findings": [item["sha256"] for item in manifest["findings"]],
+    }
+    manifest["root_sha256"] = sha256_json(root_payload)
+    rejected = verify_evidence_manifest(manifest, signing_key="server-signing-secret")
+    assert rejected["valid"] is False
+    assert rejected["signature_status"] == "INVALID"
+
+
+def test_signed_manifest_cannot_be_verified_without_server_key():
+    from evidence_manifest import build_evidence_manifest, verify_evidence_manifest
+
+    manifest = build_evidence_manifest(
+        InvestigationTrace(input_context=InvestigationInput(user_text="test")),
+        signing_key="private-key",
+    )
+    result = verify_evidence_manifest(manifest)
+    assert result["valid"] is False
+    assert result["signature_status"] == "UNVERIFIABLE"
