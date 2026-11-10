@@ -15,7 +15,7 @@ from schemas import InvestigationInput, InvestigationTrace
 router = APIRouter(prefix="/api/v1/watchtower", tags=["Watchtower"])
 _DB_PATH = os.getenv("WATCHTOWER_DB_PATH", "watchtower.sqlite3")
 _DEMO_ENABLED = os.getenv("WATCHTOWER_DEMO_ENABLED", "false").lower() in {"1","true","yes"}
-_INGEST_TOKEN = os.getenv("WATCHTOWER_INGEST_TOKEN", "")
+_INGEST_TOKEN = os.getenv("WATCHTOWER_INGEST_TOKEN") or os.getenv("SCAM_AIRBAG_API_TOKEN", "")
 _WATCHTOWER_RETENTION_DAYS = max(1, min(3650, int(os.getenv("WATCHTOWER_RETENTION_DAYS", "90"))))
 _TASKS: set[asyncio.Task] = set()
 _WATCHTOWER_MAX_CONCURRENT = max(1, min(4, int(os.getenv("WATCHTOWER_MAX_CONCURRENT", "2"))))
