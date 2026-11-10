@@ -304,6 +304,23 @@
           const state = document.createElement("span"); state.className = "source-state"; state.textContent = pretty(item.status);
           row.append(name, state); host.append(row);
         }
+        const paypalEvidence = Array.isArray(trace.paypal_evidence) ? trace.paypal_evidence : [];
+        for (const item of paypalEvidence) {
+          const card = document.createElement("div"); card.className = "detail";
+          const heading = document.createElement("div"); heading.className = "detail-title";
+          heading.textContent = `Verified PayPal record · ${pretty(item.tool_name)} · ${pretty(item.status)}`;
+          card.append(heading);
+          const grid = document.createElement("div"); grid.className = "detail-grid";
+          for (const [key, value] of Object.entries(item.evidence || {})) {
+            if (value === null || value === undefined || value === "") continue;
+            const block = document.createElement("div"); block.className = "detail-block";
+            const label = document.createElement("div"); label.className = "detail-label"; label.textContent = pretty(key);
+            const detail = document.createElement("div"); detail.className = "detail-text";
+            detail.textContent = typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
+            block.append(label, detail); grid.append(block);
+          }
+          card.append(grid); host.append(card);
+        }
         const domainEvidence = Array.isArray(trace.domain_evidence) ? trace.domain_evidence : [];
         for (const item of domainEvidence) {
           const card = document.createElement("div"); card.className = "detail";
