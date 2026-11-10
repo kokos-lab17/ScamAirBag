@@ -768,6 +768,81 @@ def _lookalike_domain_observation(domain: str) -> Dict[str, Any]:
     }
 
 
+
+def inspect_email_authentication_headers(raw_headers: str) -> ToolExecutionResult:
+    """Parse SPF/DKIM/DMARC claims from pasted headers; does not verify signatures."""
+    name = "email_authentication_headers"
+    text = (raw_headers or "").strip()
+    if not text:
+        return _result(name, "NOT_APPLICABLE", EvidenceProvenance.UNAVAILABLE,
+                       {"header_parse_status": "EMPTY"}, "EMAIL_HEADERS_EMPTY",
+                       "No email headers were supplied.")
+    if len(text) > 12000:
+        return _result(name, "FAILED", EvidenceProvenance.UNAVAILABLE,
+                       {"header_parse_status": "TOO_LARGE"}, "EMAIL_HEADERS_TOO_LARGE",
+                       "Email headers exceed the 12,000 character limit.")
+    header_block = re.split(r"\\r?\\n\\s*\\r?\\n", text, maxsplit=1)[0]
+    unfolded = re.sub(r"\\r?\\n[ \\t]+", " ", header_block)
+    fields: Dict[str, List[str]] = {}
+    for line in unfolded.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip().lower()
+        if re.fullmatch(r"[a-z0-9-]{1,80}", key):
+            fields.setdefault(key, []).append(value.strip()[:2000])
+    if not fields:
+        return _result(name, "FAILED", EvidenceProvenance.UNAVAILABLE,
+                       {"header_parse_status": "NO_HEADERS"}, "EMAIL_HEADERS_UNPARSEABLE",
+                       "No recognizable email header fields were found.")
+    auth_results = []
+    for header in fields.get("authentication-results", [])[:10]:
+        authserv = header.split(";", 1)[0].strip()[:160]
+        methods = [{"method": m.group(1).lower(), "result": m.group(2).lower()}
+                   for m in re.finditer(r"\\b(spf|dkim|dmarc)=([a-zA-Z_-]+)", header, re.I)]
+        auth_results.append({"authserv_id": authserv, "methods": methods})
+    received_spf = []
+    for value in fields.get("received-spf", [])[:10]:
+        match = re.match(r"\\s*([a-zA-Z_-]+)", value)
+        received_spf.append({"result": match.group(1).lower() if match else "UNPARSED"})
+    def extract_domain(value: str) -> Optional[str]:
+        match = re.search(r"@([A-Za-z0-9.-]+)", value)
+        return match.group(1).lower().rstrip(".") if match else None
+    from_domain = extract_domain(fields.get("from", [""])[-1]) if fields.get("from") else None
+    return_path_domain = extract_domain(fields.get("return-path", [""])[-1]) if fields.get("return-path") else None
+    dkim_domains = []
+    for signature in fields.get("dkim-signature", [])[:10]:
+        match = re.search(r"(?:^|;)\\s*d=([^;\\s]+)", signature, re.I)
+        if match:
+            dkim_domains.append(match.group(1).lower().rstrip("."))
+    present = sorted(k for k in ("from", "return-path", "authentication-results",
+                                  "received-spf", "dkim-signature") if fields.get(k))
+    alignment = []
+    if from_domain and return_path_domain:
+        alignment.append({"type": "spf_identifier_comparison", "from_domain": from_domain,
+                          "return_path_domain": return_path_domain,
+                          "same_domain": from_domain == return_path_domain,
+                          "note": "This comparison alone does not establish SPF or DMARC alignment."})
+    if from_domain:
+        for dkim_domain in dkim_domains:
+            alignment.append({"type": "dkim_identifier_comparison", "from_domain": from_domain,
+                              "dkim_domain": dkim_domain, "same_domain": from_domain == dkim_domain,
+                              "note": "Exact equality is not a complete DMARC alignment check."})
+    return _result(name, "SUCCESS", EvidenceProvenance.OBSERVED_EXTERNAL, {
+        "header_parse_status": "PARSED", "authentication_results": auth_results,
+        "received_spf_results": received_spf, "from_domain": from_domain,
+        "return_path_domain": return_path_domain, "dkim_signing_domains": dkim_domains,
+        "header_fields_present": present, "alignment_observations": alignment,
+        "limitations": [
+            "These are claims copied from supplied headers, not independently authenticated results.",
+            "Authentication-Results is trustworthy only when added by a known receiving mail server; pasted headers can be forged.",
+            "A DKIM-Signature header's presence does not prove its signature is valid.",
+            "No live SPF, DKIM cryptographic, or DMARC DNS verification is performed."
+        ],
+    })
+
+
+
 def tool_domain_intelligence(domain_or_url: str) -> ToolExecutionResult:
     """Observe DNS, WHOIS, and TLS certificate metadata; never fetch page content."""
     name = "domain_intelligence"
