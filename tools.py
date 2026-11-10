@@ -932,6 +932,7 @@ TOOL_REGISTRY = {
     "historical_pattern_search": search_similar_cases,
     "threat_intelligence": check_domain_reputation,
     "extract_message_context": tool_extract_message_context,
+    "email_authentication_headers": inspect_email_authentication_headers,
 }
 
 
@@ -957,6 +958,8 @@ def run_tool(tool_name: str, arguments: Dict[str, Any]) -> ToolExecutionResult:
             if tool_name == "historical_pattern_search":
                 return function(domain=str(arguments["domain_or_url"]))
             return function(domain_or_url=str(arguments["domain_or_url"]))
+        if tool_name == "email_authentication_headers":
+            return function(raw_headers=str(arguments["email_headers"]))
         if tool_name == "extract_message_context":
             return function(user_text=arguments.get("user_text"))
     except KeyError as exc:
