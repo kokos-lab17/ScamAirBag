@@ -426,7 +426,7 @@ def _build_findings(
                 "ARTIFICIAL_DEADLINE",
                 "The sender creates immediate time pressure by demanding action within a short or same-day deadline.",
                 RiskLevel.MEDIUM, 10,
-                [r"\burgent(?:ly)?\b", r"\bby today\b", r"\bwithin\s+\d+\s+minutes?\b", r"\bwithin\s+\d+\s+hours?\b", r"\bdeadline\b"],
+                [r"\burgent(?:ly)?\b", r"\bby today\b", r"\bwithin\s+\d+\s+minutes?\b", r"\bwithin\s+\d+\s+hours?\b", r"\byou have\s+\d+\s+hours?\b", r"\b\d+\s+hours?\s+to\s+(?:solve|resolve|confirm|verify|respond|act)\b", r"\bdeadline\b"],
                 "Deadline evidence"
             ): detected.add("deadline")
             if add_text_finding(
