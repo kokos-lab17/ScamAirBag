@@ -710,7 +710,7 @@ def run_investigation(
                 except (TypeError, ValueError):
                     status_code = None
 
-                if status_code not in {500, 502, 503, 504}:
+                if status_code not in {429, 500, 502, 503, 504}:
                     raise
 
                 fallback_model = _fallback_model_name(active_model)
