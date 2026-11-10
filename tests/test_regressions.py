@@ -404,3 +404,26 @@ def test_public_trace_does_not_expose_model_rationale():
     public = main._public_trace(trace)
     assert "rationale" not in public["steps"][0]
     assert "Private model text" not in str(public)
+
+
+def test_lookalike_domain_detector_flags_one_edit_paypal_domain():
+    result = tools._lookalike_domain_observation("paypa1.com")
+    assert result["status"] == "POTENTIAL_MATCH"
+    assert any(
+        item["brand_domain"] == "paypal.com"
+        and item["match_type"] == "ONE_EDIT_DOMAIN_SIMILARITY"
+        for item in result["matches"]
+    )
+    assert "not proof" in result["disclaimer"]
+
+
+def test_lookalike_domain_detector_flags_brand_in_deceptive_subdomain():
+    result = tools._lookalike_domain_observation("paypal.com.attacker.test")
+    assert result["status"] == "POTENTIAL_MATCH"
+    assert any(item["match_type"] == "BRAND_NAME_IN_SUBDOMAIN" for item in result["matches"])
+
+
+def test_lookalike_domain_detector_does_not_flag_exact_canonical_domain():
+    result = tools._lookalike_domain_observation("paypal.com")
+    assert result["status"] == "NO_MATCH_IN_REFERENCE_SET"
+    assert result["matches"] == []
