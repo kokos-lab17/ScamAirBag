@@ -31,6 +31,7 @@ import json
 import logging
 import hmac
 import time
+import threading
 from collections import deque
 from dotenv import load_dotenv
 load_dotenv()
@@ -411,8 +412,12 @@ async def investigate_stream(
     loop = asyncio.get_running_loop()
     finished = object()
 
+    cancel_event = threading.Event()
+
     def publish_event(event: Any) -> None:
         # Callback executes in the worker thread.
+        if cancel_event.is_set():
+            return
         try:
             event_payload = _dump_model(event)
             loop.call_soon_threadsafe(
@@ -428,6 +433,7 @@ async def investigate_stream(
             return run_investigation(
                 investigation_input,
                 event_callback=publish_event,
+                cancel_event=cancel_event,
             )
         except Exception:
             logger.exception("Unexpected streaming investigation failure")
@@ -444,7 +450,7 @@ async def investigate_stream(
 
             while True:
                 if await request.is_disconnected():
-                    worker.cancel()
+                    cancel_event.set()
                     break
 
                 try:
@@ -478,7 +484,10 @@ async def investigate_stream(
                     break
         finally:
             if not worker.done():
-                worker.cancel()
+                # asyncio cannot stop an already-running worker thread. Signal
+                # cooperative cancellation and keep its semaphore slot until
+                # the provider call returns and the controller exits.
+                cancel_event.set()
 
     return StreamingResponse(
         event_generator(),
