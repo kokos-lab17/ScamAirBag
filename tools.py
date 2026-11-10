@@ -621,6 +621,8 @@ def tool_link_redirect_inspection(url: str) -> ToolExecutionResult:
     name = "link_redirect_inspection"
     try:
         current = url.strip()
+        if current.lower().startswith("www."):
+            current = "https://" + current
         parsed = urlsplit(current)
         if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
             raise ValueError("A complete HTTP or HTTPS URL is required.")
