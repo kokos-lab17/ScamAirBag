@@ -334,7 +334,8 @@
       activeController = new AbortController();
       $("results").classList.remove("hidden");
       $("timeline").replaceChildren();
-      $("findings").textContent = "Investigation in progress…";
+      $("findingsFallback").textContent = "Investigation in progress…";
+      $("findingsFallback").classList.remove("hidden");
       $("sources").textContent = "Waiting for source checks…";
       $("summary").textContent = "The agent is gathering evidence.";
       $("riskScore").textContent = "…";
@@ -393,7 +394,8 @@
       $("shareIntelligence").checked = false;
       if (window.findingsGridApi) { window.findingsGridApi.destroy(); window.findingsGridApi = null; }
       $("timeline").replaceChildren();
-      $("findings").textContent = "No findings yet.";
+      $("findingsFallback").textContent = "No findings yet.";
+      $("findingsFallback").classList.add("hidden");
       $("sources").textContent = "Waiting for source checks.";
       $("results").classList.add("hidden");
       statusEl.textContent = "Ready when you are.";
