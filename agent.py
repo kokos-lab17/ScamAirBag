@@ -13,7 +13,8 @@ Install:
 
 Environment:
     GEMINI_API_KEY
-    GEMINI_MODEL (default: gemini-2.5-flash)
+    GEMINI_MODEL (default: gemini-3.8-flash)
+    GEMINI_FALLBACK_MODEL (default: gemini-3.5-flash)
 
 Public entry point:
     run_investigation(request, event_callback=None) -> InvestigationTrace
@@ -23,10 +24,9 @@ to stream safe progress events; do not expose model chain-of-thought.
 """
 
 from __future__ import annotations
-import logging
 
-logger = logging.getLogger(__name__)
 import json
+import logging
 import os
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -46,7 +46,10 @@ from scoring import score_investigation
 from tools import run_tool
 from elastic_intelligence import elastic_is_configured, store_opt_in_case
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+logger = logging.getLogger(__name__)
+
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash")
 MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "12"))
 MAX_MODEL_TURNS = int(os.getenv("MAX_MODEL_TURNS", "24"))
 
@@ -256,13 +259,14 @@ def _parse_decision(arguments: Any) -> AgentDecision:
     return decision
 
 
-def _function_response(types: Any, payload: Dict[str, Any]) -> Any:
+def _function_response(types: Any, payload: Dict[str, Any], call_id: Optional[str]) -> Any:
     return types.Content(
         role="user",
         parts=[
             types.Part.from_function_response(
                 name="submit_agent_decision",
                 response=payload,
+                id=call_id,
             )
         ],
     )
@@ -475,12 +479,12 @@ def run_investigation(
         from google.genai import types
 
         client = genai.Client(api_key=api_key)
+        active_model = GEMINI_MODEL
         declaration = _decision_function_declaration(types)
         gemini_tool = types.Tool(function_declarations=[declaration])
         config = types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTIONS,
             tools=[gemini_tool],
-            temperature=0.1,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(
                 disable=True
             ),
@@ -514,11 +518,37 @@ def run_investigation(
                 )],
             ))
 
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=contents,
-                config=config,
-            )
+            try:
+                response = client.models.generate_content(
+                    model=active_model,
+                    contents=contents,
+                    config=config,
+                )
+            except Exception as exc:
+                # The Google GenAI SDK exposes the HTTP status as `code`.
+                # Check status_code as a compatibility fallback.
+                status_code = getattr(exc, "code", None)
+                if status_code is None:
+                    status_code = getattr(exc, "status_code", None)
+                try:
+                    status_code = int(status_code)
+                except (TypeError, ValueError):
+                    status_code = None
+
+                if status_code != 503 or active_model == GEMINI_FALLBACK_MODEL:
+                    raise
+
+                logger.warning(
+                    "Primary Gemini model %s returned HTTP 503; switching to %s.",
+                    active_model,
+                    GEMINI_FALLBACK_MODEL,
+                )
+                active_model = GEMINI_FALLBACK_MODEL
+                response = client.models.generate_content(
+                    model=active_model,
+                    contents=contents,
+                    config=config,
+                )
 
             candidate = (
                 response.candidates[0]
@@ -551,7 +581,7 @@ def run_investigation(
                 contents.append(_function_response(types, {
                     "accepted": False,
                     "error": str(exc)[:200],
-                }))
+                }, call.id))
                 feedback = "The previous decision was invalid. Submit a corrected decision."
                 continue
 
@@ -590,7 +620,7 @@ def run_investigation(
                         "accepted": True,
                         "action": "FINISH",
                         "message": "Investigation is complete.",
-                    }))
+                    }, call.id))
                     investigation_completed = True
                     break
 
@@ -646,7 +676,7 @@ def run_investigation(
                 contents.append(_function_response(types, {
                     "accepted": True,
                     "tool_result": _tool_evidence_for_model(result),
-                }))
+                }, call.id))
                 feedback = None
 
         else:
