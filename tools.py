@@ -781,8 +781,8 @@ def inspect_email_authentication_headers(raw_headers: str) -> ToolExecutionResul
         return _result(name, "FAILED", EvidenceProvenance.UNAVAILABLE,
                        {"header_parse_status": "TOO_LARGE"}, "EMAIL_HEADERS_TOO_LARGE",
                        "Email headers exceed the 12,000 character limit.")
-    header_block = re.split(r"\\r?\\n\\s*\\r?\\n", text, maxsplit=1)[0]
-    unfolded = re.sub(r"\\r?\\n[ \\t]+", " ", header_block)
+    header_block = re.split(r"\r?\n\s*\r?\n", text, maxsplit=1)[0]
+    unfolded = re.sub(r"\r?\n[ \t]+", " ", header_block)
     fields: Dict[str, List[str]] = {}
     for line in unfolded.splitlines():
         if ":" not in line:
@@ -799,11 +799,11 @@ def inspect_email_authentication_headers(raw_headers: str) -> ToolExecutionResul
     for header in fields.get("authentication-results", [])[:10]:
         authserv = header.split(";", 1)[0].strip()[:160]
         methods = [{"method": m.group(1).lower(), "result": m.group(2).lower()}
-                   for m in re.finditer(r"\\b(spf|dkim|dmarc)=([a-zA-Z_-]+)", header, re.I)]
+                   for m in re.finditer(r"\b(spf|dkim|dmarc)=([a-zA-Z_-]+)", header, re.I)]
         auth_results.append({"authserv_id": authserv, "methods": methods})
     received_spf = []
     for value in fields.get("received-spf", [])[:10]:
-        match = re.match(r"\\s*([a-zA-Z_-]+)", value)
+        match = re.match(r"\s*([a-zA-Z_-]+)", value)
         received_spf.append({"result": match.group(1).lower() if match else "UNPARSED"})
     def extract_domain(value: str) -> Optional[str]:
         match = re.search(r"@([A-Za-z0-9.-]+)", value)
@@ -812,7 +812,7 @@ def inspect_email_authentication_headers(raw_headers: str) -> ToolExecutionResul
     return_path_domain = extract_domain(fields.get("return-path", [""])[-1]) if fields.get("return-path") else None
     dkim_domains = []
     for signature in fields.get("dkim-signature", [])[:10]:
-        match = re.search(r"(?:^|;)\\s*d=([^;\\s]+)", signature, re.I)
+        match = re.search(r"(?:^|;)\s*d=([^;\s]+)", signature, re.I)
         if match:
             dkim_domains.append(match.group(1).lower().rstrip("."))
     present = sorted(k for k in ("from", "return-path", "authentication-results",
@@ -828,7 +828,7 @@ def inspect_email_authentication_headers(raw_headers: str) -> ToolExecutionResul
             alignment.append({"type": "dkim_identifier_comparison", "from_domain": from_domain,
                               "dkim_domain": dkim_domain, "same_domain": from_domain == dkim_domain,
                               "note": "Exact equality is not a complete DMARC alignment check."})
-    return _result(name, "SUCCESS", EvidenceProvenance.OBSERVED_EXTERNAL, {
+    return _result(name, "SUCCESS", EvidenceProvenance.USER_PROVIDED, {
         "header_parse_status": "PARSED", "authentication_results": auth_results,
         "received_spf_results": received_spf, "from_domain": from_domain,
         "return_path_domain": return_path_domain, "dkim_signing_domains": dkim_domains,
