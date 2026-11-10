@@ -100,6 +100,46 @@ def _update(event_id,**values):
     sql=", ".join(f"{k}=?" for k in fields)
     with _db() as db: db.execute(f"UPDATE watchtower_events SET {sql} WHERE event_id=?",(*fields.values(),event_id))
 
+def _build_watchtower_alert(trace: InvestigationTrace) -> Dict[str, Any]:
+    scorecard = trace.final_scorecard
+    if scorecard is None:
+        return {"level": "INCOMPLETE", "needs_attention": True, "title": "Investigation incomplete",
+                "message": "No scorecard was produced. Verify through PayPal directly."}
+    score = int(scorecard.risk_score)
+    action = getattr(scorecard.recommended_action, "value", str(scorecard.recommended_action))
+    if score >= 70:
+        level, title = "CRITICAL", "High-risk indicators detected"
+    elif score >= 45:
+        level, title = "HIGH", "Suspicious payment activity needs review"
+    elif score >= 20:
+        level, title = "MEDIUM", "Some risk indicators need review"
+    elif score > 0:
+        level, title = "LOW", "A small number of indicators were observed"
+    else:
+        level, title = "INFO", "No scored indicators were found"
+    incomplete = trace.status != "COMPLETED"
+    needs_attention = incomplete or score >= 45 or action == "ABORT_PAYMENT"
+    if incomplete:
+        title = "Investigation incomplete — verify manually"
+    top_findings = [
+        item.description for item in sorted(
+            scorecard.findings, key=lambda finding: finding.risk_impact, reverse=True
+        )[:3]
+    ]
+    return {
+        "level": "INCOMPLETE" if incomplete else level,
+        "needs_attention": needs_attention,
+        "title": title,
+        "message": "Pause and verify through an official PayPal channel before paying."
+                   if needs_attention else "Review the evidence; this is not a guarantee of safety.",
+        "risk_score": score,
+        "coverage_score": int(scorecard.coverage_score),
+        "confidence_level": scorecard.confidence_level,
+        "recommended_action": action,
+        "top_findings": top_findings,
+    }
+
+
 async def _investigate_event(event_id,public_trace):
     now = _now()
     with _db() as db:
@@ -114,6 +154,7 @@ async def _investigate_event(event_id,public_trace):
         payload=InvestigationInput(identifier=r["identifier"],identifier_hint=r["identifier_hint"])
         trace=await asyncio.to_thread(run_investigation,payload)
         result=public_trace(trace)
+        result["watchtower_alert"] = _build_watchtower_alert(trace)
         status="COMPLETED" if trace.status=="COMPLETED" else "PARTIAL" if trace.status=="PARTIAL" else "FAILED"
         _update(event_id,status=status,completed_at=_now(),result_json=json.dumps(result,separators=(",",":"),ensure_ascii=False),error_code=trace.error_code)
     except Exception:
