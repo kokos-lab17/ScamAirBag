@@ -266,11 +266,9 @@ def _function_response(types: Any, payload: Dict[str, Any], call_id: Optional[st
             types.Part.from_function_response(
                 name="submit_agent_decision",
                 response=payload,
-                id=call_id,
             )
         ],
     )
-
 
 def _tool_evidence_for_model(result: ToolExecutionResult) -> Dict[str, Any]:
     """Minimize external data before it is sent back to the model."""
