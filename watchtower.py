@@ -171,6 +171,47 @@ def _build_watchtower_alert(trace: InvestigationTrace) -> Dict[str, Any]:
     }
 
 
+def _correlate_prior_domains(event_id: str, current_result: Dict[str, Any]) -> list[Dict[str, Any]]:
+    """Correlate exact observed domains across prior Watchtower cases, without treating repetition as proof."""
+    current_domains = {
+        item.get("observations", {}).get("domain")
+        for item in current_result.get("domain_evidence", [])
+        if isinstance(item, dict) and item.get("observations", {}).get("domain")
+    }
+    if not current_domains:
+        return []
+    with _db() as db:
+        rows = db.execute(
+            "SELECT received_at,result_json FROM watchtower_events "
+            "WHERE event_id<>? AND status IN ('COMPLETED','PARTIAL') "
+            "AND result_json IS NOT NULL ORDER BY received_at DESC LIMIT 250",
+            (event_id,),
+        ).fetchall()
+    correlations = []
+    for domain in sorted(current_domains):
+        matches = []
+        for row in rows:
+            try:
+                prior = json.loads(row["result_json"])
+            except (TypeError, ValueError):
+                continue
+            prior_domains = {
+                item.get("observations", {}).get("domain")
+                for item in prior.get("domain_evidence", [])
+                if isinstance(item, dict) and item.get("observations", {}).get("domain")
+            }
+            if domain in prior_domains:
+                matches.append(row["received_at"])
+        if matches:
+            correlations.append({
+                "domain": domain,
+                "prior_case_observations": len(matches),
+                "most_recent_prior_observation": matches[0],
+                "interpretation": "Repeated appearance is contextual correlation only; it does not establish common ownership or fraud.",
+            })
+    return correlations
+
+
 async def _investigate_event(event_id,public_trace):
     now = _now()
     with _db() as db:
@@ -188,7 +229,11 @@ async def _investigate_event(event_id,public_trace):
             timeout=MAX_INVESTIGATION_SECONDS + 45,
         )
         result=public_trace(trace)
+        correlations = _correlate_prior_domains(event_id, result)
+        result["historical_correlations"] = correlations
         result["watchtower_alert"] = _build_watchtower_alert(trace)
+        if correlations:
+            result["watchtower_alert"]["historical_context"] = correlations
         status="COMPLETED" if trace.status=="COMPLETED" else "PARTIAL" if trace.status=="PARTIAL" else "FAILED"
         _update(event_id,status=status,completed_at=_now(),result_json=json.dumps(result,separators=(",",":"),ensure_ascii=False),error_code=trace.error_code)
     except asyncio.TimeoutError:
