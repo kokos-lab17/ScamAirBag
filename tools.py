@@ -586,17 +586,19 @@ def _head_request_pinned(url: str, domain: str, ip: str) -> Dict[str, Any]:
     if parsed.query:
         path += "?" + parsed.query
     path = path[:2048]
+    if any(ord(char) < 32 or ord(char) == 127 for char in path):
+        raise ValueError("URL path contains control characters.")
     raw = socket.create_connection((ip, port), timeout=4)
     sock = raw
     try:
         if scheme == "https":
             sock = ssl.create_default_context().wrap_socket(raw, server_hostname=domain)
         request = (
-            "HEAD " + path + " HTTP/1.1\\r\\n"
-            + "Host: " + domain + "\\r\\n"
-            + "User-Agent: ScamAirbag-LinkInspector/1.0\\r\\n"
-            + "Accept: */*\\r\\n"
-            + "Connection: close\\r\\n\\r\\n"
+            "HEAD " + path + " HTTP/1.1\r\n"
+            + "Host: " + domain + "\r\n"
+            + "User-Agent: ScamAirbag-LinkInspector/1.0\r\n"
+            + "Accept: */*\r\n"
+            + "Connection: close\r\n\r\n"
         ).encode("ascii", errors="strict")
         sock.sendall(request)
         response = http.client.HTTPResponse(sock)
