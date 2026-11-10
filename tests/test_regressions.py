@@ -1097,3 +1097,53 @@ def test_subscription_plan_pricing_is_a_separate_applicable_coverage_check():
     assert plan.applicable is True
     assert plan.status == "FAILED"
     assert plan.error_code == "PAYPAL_HTTP_403"
+
+
+def test_amount_comparison_rejects_quote_with_different_numeric_value():
+    from scoring import _compare_claimed_amount
+
+    entities = ExtractedEntities(
+        claimed_amount="125.00", claimed_currency_code="USD",
+        claimed_amount_quote="Pay USD 100.00 today",
+    )
+    invoice = ToolExecutionResult(
+        tool_name="paypal_invoice", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"amount": {"value": "100.00", "currency_code": "USD"}},
+    )
+    match, reason = _compare_claimed_amount(entities, [invoice], "Please pay USD 100.00 today")
+    assert match is None
+    assert "does not match" in reason
+
+
+def test_amount_comparison_does_not_guess_currency_from_dollar_symbol():
+    from scoring import _compare_claimed_amount
+
+    entities = ExtractedEntities(
+        claimed_amount="100.00", claimed_currency_code="USD",
+        claimed_amount_quote="Pay $100.00 today",
+    )
+    invoice = ToolExecutionResult(
+        tool_name="paypal_invoice", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"amount": {"value": "100.00", "currency_code": "USD"}},
+    )
+    match, reason = _compare_claimed_amount(entities, [invoice], "Please pay $100.00 today")
+    assert match is None
+    assert "does not establish" in reason
+
+
+def test_amount_comparison_accepts_unambiguous_rupee_symbol():
+    from scoring import _compare_claimed_amount
+
+    entities = ExtractedEntities(
+        claimed_amount="100.00", claimed_currency_code="INR",
+        claimed_amount_quote="Pay ₹100.00 today",
+    )
+    invoice = ToolExecutionResult(
+        tool_name="paypal_invoice", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"amount": {"value": "100.00", "currency_code": "INR"}},
+    )
+    match, _ = _compare_claimed_amount(entities, [invoice], "Please pay ₹100.00 today")
+    assert match is True
