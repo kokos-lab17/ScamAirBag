@@ -148,6 +148,28 @@ def _dump_model(value: Any) -> Dict[str, Any]:
     return value.dict()
 
 
+def _public_domain_evidence(trace: InvestigationTrace) -> list[Dict[str, Any]]:
+    """Expose a strict allowlist of non-personal domain observations."""
+    allowed = {
+        "domain", "resolved_ips", "dns_status", "whois_status",
+        "creation_date", "domain_age_days", "whois_available",
+        "tls_status", "tls_checked", "tls_issuer", "tls_not_before",
+        "tls_not_after", "tls_days_until_expiry", "tls_subject_alt_names",
+        "tls_hostname_verified", "tls_error",
+    }
+    evidence = []
+    for step in trace.steps:
+        result = step.result
+        if not result or result.tool_name != "domain_intelligence":
+            continue
+        safe_data = {key: value for key, value in result.data.items() if key in allowed}
+        evidence.append({
+            "tool_name": result.tool_name, "status": result.status,
+            "provenance": result.provenance.value, "error_code": result.error_code,
+            "observations": safe_data,
+        })
+    return evidence
+
 def _public_trace(trace: InvestigationTrace) -> Dict[str, Any]:
     """Return an audit summary without echoing raw messages or raw tool payloads."""
     steps = []
@@ -176,6 +198,7 @@ def _public_trace(trace: InvestigationTrace) -> Dict[str, Any]:
             item.model_dump(mode="json") if hasattr(item, "model_dump") else item.dict()
             for item in trace.source_outcomes
         ],
+        "domain_evidence": _public_domain_evidence(trace),
         "final_scorecard": (
             trace.final_scorecard.model_dump(mode="json")
             if trace.final_scorecard and hasattr(trace.final_scorecard, "model_dump")
