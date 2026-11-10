@@ -143,6 +143,28 @@ def _paypal_seller_email(
     return None, None
 
 
+def _paypal_seller_domains(tool_results: Sequence[ToolExecutionResult]) -> List[str]:
+    """Return domains from verified seller/payee fields, never subscription payer email."""
+    emails = []
+    invoice = _result_by_name(tool_results, "paypal_invoice")
+    if invoice and invoice.status == "SUCCESS":
+        email = _normalize_email(invoice.data.get("seller_email"))
+        if email:
+            emails.append(email)
+    order = _result_by_name(tool_results, "paypal_order")
+    if order and order.status == "SUCCESS":
+        for unit in order.data.get("purchase_units", []) or []:
+            email = _normalize_email(unit.get("payee_email"))
+            if email:
+                emails.append(email)
+    domains = []
+    for email in emails:
+        domain = email.rsplit("@", 1)[-1].lower().rstrip(".")
+        if domain and domain not in domains:
+            domains.append(domain)
+    return domains
+
+
 def _source_outcome(
     source_name: str,
     applicable: bool,
@@ -187,6 +209,18 @@ def build_source_outcomes(
 ) -> List[SourceOutcome]:
     """Build coverage at the granularity of each applicable evidence check."""
     outcomes: List[SourceOutcome] = []
+
+    email_headers_applicable = bool(input_context.email_headers and input_context.email_headers.strip())
+    email_result = _result_by_name(tool_results, "email_authentication_headers")
+    if not email_headers_applicable:
+        outcomes.append(_source_outcome("email_authentication", False, "NOT_APPLICABLE",
+                                        EvidenceProvenance.UNAVAILABLE, "NO_EMAIL_HEADERS"))
+    elif email_result is None:
+        outcomes.append(_source_outcome("email_authentication", True, "SKIPPED",
+                                        EvidenceProvenance.UNAVAILABLE, "EMAIL_HEADER_CHECK_NOT_ATTEMPTED"))
+    else:
+        outcomes.append(_source_outcome("email_authentication", True, email_result.status,
+                                        email_result.provenance, email_result.error_code))
 
     extraction = _result_by_name(tool_results, "extract_message_context")
     message_applicable = bool(input_context.user_text and input_context.user_text.strip())
@@ -237,7 +271,7 @@ def build_source_outcomes(
             "NO_IDENTIFIER",
         ))
 
-    domains = list(dict.fromkeys(extracted_entities.detected_domains if extracted_entities else []))
+    domains = list(dict.fromkeys((extracted_entities.detected_domains if extracted_entities else []) + _paypal_seller_domains(tool_results)))
     if not domains:
         outcomes.append(_source_outcome(
             "domain_intelligence", False, "NOT_APPLICABLE", EvidenceProvenance.UNAVAILABLE,
@@ -321,6 +355,26 @@ def build_source_outcomes(
                     f"elastic_history:{_domain_key(domain)}", False, "NOT_APPLICABLE",
                     EvidenceProvenance.UNAVAILABLE, "ELASTIC_NOT_CONFIGURED",
                 ))
+
+    urls = list(dict.fromkeys(extracted_entities.detected_urls if extracted_entities else []))
+    if not urls:
+        outcomes.append(_source_outcome(
+            "link_redirect_inspection", False, "NOT_APPLICABLE",
+            EvidenceProvenance.UNAVAILABLE, "NO_COMPLETE_URL_DETECTED",
+        ))
+    else:
+        for url in urls:
+            inspected = next((
+                item for item in reversed(tool_results)
+                if item.tool_name == "link_redirect_inspection"
+                and item.data.get("initial_url") == url
+            ), None)
+            outcomes.append(_source_outcome(
+                f"link_redirect:{_domain_key(url)}", True,
+                inspected.status if inspected else "SKIPPED",
+                inspected.provenance if inspected else EvidenceProvenance.UNAVAILABLE,
+                inspected.error_code if inspected else "REDIRECT_INSPECTION_NOT_ATTEMPTED",
+            ))
 
     return outcomes
 
@@ -426,7 +480,7 @@ def _build_findings(
                 "ARTIFICIAL_DEADLINE",
                 "The sender creates immediate time pressure by demanding action within a short or same-day deadline.",
                 RiskLevel.MEDIUM, 10,
-                [r"\burgent(?:ly)?\b", r"\bby today\b", r"\bwithin\s+\d+\s+minutes?\b", r"\bwithin\s+\d+\s+hours?\b", r"\bdeadline\b"],
+                [r"\burgent(?:ly)?\b", r"\bby today\b", r"\bwithin\s+\d+\s+minutes?\b", r"\bwithin\s+\d+\s+hours?\b", r"\byou have\s+\d+\s+hours?\b", r"\b\d+\s+hours?\s+to\s+(?:solve|resolve|confirm|verify|respond|act)\b", r"\bdeadline\b"],
                 "Deadline evidence"
             ): detected.add("deadline")
             if add_text_finding(
@@ -436,6 +490,18 @@ def _build_findings(
                 [r"\bsuspend(?:ed)?\b", r"\bsuspension\b", r"\bcancel\w*\b", r"\bterminate(?:d)?\b", r"\bdeactivat(?:e|ed|ion)\b"],
                 "Service-threat evidence"
             ): detected.add("service_threat")
+            if add_text_finding(
+                "ACCOUNT_ACCESS_THREAT",
+                "The message threatens to restrict or permanently disable account access unless the recipient acts.",
+                RiskLevel.HIGH, 15,
+                [
+                    r"\baccount\b.{0,45}\b(?:limited|restricted|disabled|suspended|blocked)\b",
+                    r"\b(?:limited|restricted|disabled|suspended|blocked)\b.{0,45}\baccount\b",
+                    r"\bpermanently\s+disabled\b",
+                    r"\bno\s+longer\s+have\s+access\b",
+                ],
+                "Account-access threat evidence"
+            ): detected.add("account_access_threat")
             if add_text_finding(
                 "FINANCIAL_PENALTY_THREAT",
                 "The sender threatens an additional financial penalty or charge if the recipient does not comply.",
@@ -460,7 +526,7 @@ def _build_findings(
             if add_text_finding(
                 "SENSITIVE_INFORMATION_REQUEST",
                 "The sender asks for account or other sensitive personal information outside a verified, trusted channel.",
-                RiskLevel.HIGH, 10,
+                RiskLevel.HIGH, 15,
                 [r"account\s+details", r"bank\s+details", r"card\s+details", r"send.{0,35}details", r"provide.{0,35}details"],
                 "Sensitive-information evidence"
             ): detected.add("sensitive_info")

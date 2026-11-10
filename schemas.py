@@ -15,6 +15,7 @@ class EvidenceProvenance(str, Enum):
     """Tracks the exact origin and verification level of every piece of data."""
     VERIFIED_PAYPAL = "VERIFIED_PAYPAL"       # Direct response from PayPal Sandbox API
     OBSERVED_EXTERNAL = "OBSERVED_EXTERNAL"   # Real DNS / WHOIS / Registrar lookups
+    USER_PROVIDED = "USER_PROVIDED"           # Data supplied directly by the user
     AI_INFERRED = "AI_INFERRED"               # Extracted or inferred by LLM forensic analysis
     UNAVAILABLE = "UNAVAILABLE"               # Requested check failed, timed out, or had no data
     HISTORICAL_CASE = "HISTORICAL_CASE"         # Prior opt-in, minimized investigation record
@@ -52,6 +53,7 @@ class RecommendedAction(str, Enum):
 class InvestigationInput(BaseModel):
     """Captures initial user submission while preserving clear boundaries."""
     user_text: Optional[str] = Field(default=None, description="Untrusted message, email, or chat text")
+    email_headers: Optional[str] = Field(default=None, description="Optional raw email headers for authentication-result inspection")
     identifier: Optional[str] = Field(default=None, description="Transaction identifier (Invoice ID, Order ID, etc.)")
     identifier_hint: Optional[str] = Field(
         default=None,

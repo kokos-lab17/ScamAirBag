@@ -118,6 +118,51 @@ Open `http://localhost:3000`.
 4. Enter the identifier and choose its exact type in the UI.
 5. Do not use arbitrary live customer identifiers. PayPal access is account- and authorization-scoped.
 
+
+## Airbag Watchtower (event-driven investigations)
+
+Watchtower adds an event intake path that can wake the existing investigation agent without a user pasting a message or pressing the manual Investigate button.
+
+**Supported paths:**
+
+- **Verified PayPal Invoicing webhooks:** `POST /api/v1/watchtower/paypal/webhook` verifies the incoming transmission with PayPal's `/v1/notifications/verify-webhook-signature` API before trusting the event. The initial pre-payment allowlist includes invoice events `INVOICING.INVOICE.CREATED`, `INVOICING.INVOICE.SENT`, and `INVOICING.INVOICE.UPDATED`; order event `CHECKOUT.ORDER.APPROVED`; and subscription events `BILLING.SUBSCRIPTION.CREATED`, `BILLING.SUBSCRIPTION.ACTIVATED`, and `BILLING.SUBSCRIPTION.UPDATED`. A verified event automatically schedules the matching PayPal Sandbox invoice, order, or subscription lookup and investigation.
+- **Authenticated generic event intake:** `POST /api/v1/watchtower/events` requires the `X-Watchtower-Token` header matching `WATCHTOWER_INGEST_TOKEN`. The same token protects private event-history reads and the demo trigger; enter it in the Watchtower dashboard's access-token field. This is a trusted integration endpoint, not proof that the sender is PayPal.
+- **Explicit demo simulator:** `POST /api/v1/watchtower/demo/simulate-invoice` is available only when `WATCHTOWER_DEMO_ENABLED=true`. The dashboard labels this as simulated. The investigation still attempts a real Sandbox invoice lookup; no invoice facts are fabricated.
+
+### Configure a PayPal Sandbox webhook
+
+1. Deploy the API over HTTPS and confirm `https://YOUR-API-HOST/api/v1/watchtower/status` responds.
+2. Set `WATCHTOWER_PUBLIC_API_URL=https://YOUR-API-HOST` and configure the existing Sandbox `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` on the API service.
+3. In the Watchtower dashboard, enter the `WATCHTOWER_INGEST_TOKEN` and click **Register PayPal webhook**. ScamAirbag creates the subscription with PayPal and saves the returned webhook ID in Watchtower settings.
+4. Copy the returned webhook ID into the API service environment as `PAYPAL_WEBHOOK_ID` as a persistence backup, especially if the host does not provide a persistent disk.
+5. Trigger a Sandbox invoice, order, or subscription event and check Watchtower's event feed. You can also manage subscriptions in the PayPal Developer Dashboard. Only events that pass PayPal's signature-verification API are recorded with source `VERIFIED_PAYPAL_WEBHOOK`. The handler preserves the original webhook body bytes when constructing PayPal's verification request, as PayPal warns that parsing and reserializing the event can invalidate verification.
+
+Required/optional environment variables:
+
+```env
+PAYPAL_WEBHOOK_ID=your_sandbox_webhook_id
+WATCHTOWER_PUBLIC_API_URL=https://your-api-host.onrender.com
+WATCHTOWER_DEMO_ENABLED=true
+WATCHTOWER_INGEST_TOKEN=use-a-long-random-secret-for-your-own-integration
+WATCHTOWER_DB_PATH=/var/data/watchtower.sqlite3\nWATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE=false
+```
+
+`WATCHTOWER_DB_PATH` must point to a mounted persistent disk path if event history must survive Render instance replacement/restarts. Without persistent storage, SQLite is only local/ephemeral history. Autonomous case storage is off by default. Set `WATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE=true` only after explicitly opting in; actual storage also requires `ELASTIC_STORE_CASES=true`. Historical lookups can use configured Elastic records, but matches remain contextual and never prove fraud.\n\nThe current background task runner is single-process and in-process: it is appropriate for a controlled hackathon prototype, not yet a production durable queue. PayPal's Developer Dashboard webhook simulator does not support postback signature verification; use a real Sandbox app event for the verified-webhook path, or the clearly labelled Watchtower demo simulator to demonstrate automatic agent wake-up. A process restart can interrupt an active investigation; the next engineering phase is a durable worker/queue and deployment-aware recovery.
+
+### Watchtower API
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/v1/watchtower/status` | Listener/configuration status and event counts |
+| GET | `/api/v1/watchtower/events` | Recent event history |
+| GET | `/api/v1/watchtower/events/{event_id}` | One event and its safe public result |
+| POST | `/api/v1/watchtower/paypal/register` | Register supported events with the connected PayPal Sandbox app (token required) |
+| POST | `/api/v1/watchtower/paypal/webhook` | PayPal signature-verified webhook intake |
+| POST | `/api/v1/watchtower/events` | Shared-secret authenticated generic event intake |
+| POST | `/api/v1/watchtower/demo/simulate-invoice` | Explicitly simulated invoice event for demos |
+
+Watchtower does not claim to continuously poll a PayPal account. It reacts to webhooks after you register the HTTPS endpoint and configure the webhook ID. PayPal delivers only events associated with the REST app to which that webhook is subscribed; this is not a universal feed of every activity in a person's PayPal account. It does not automatically approve, decline, pay, cancel, or otherwise change transactions.
+
 ## Optional Elastic historical intelligence
 
 Set:
@@ -190,7 +235,7 @@ The API returns a public trace summary, not the raw submitted message or unfilte
 
 ```bash
 pytest -q
-python -m py_compile schemas.py tools.py elastic_intelligence.py scoring.py agent.py main.py render_dispatch.py render_workflow_tasks.py
+python -m py_compile schemas.py tools.py elastic_intelligence.py scoring.py agent.py watchtower.py main.py render_dispatch.py render_workflow_tasks.py
 ```
 
 The automated tests use mocks and do not require live Gemini, PayPal, Elastic, or Render credentials. Live integration tests must be run with your own Sandbox and service credentials.

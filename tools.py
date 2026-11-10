@@ -13,11 +13,13 @@ Environment:
 """
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import os
 import re
 import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -37,6 +39,7 @@ PAYPAL_BASE_URL = os.getenv("PAYPAL_BASE_URL", "https://api-m.sandbox.paypal.com
 PAYPAL_TIMEOUT_SECONDS = float(os.getenv("PAYPAL_TIMEOUT_SECONDS", "12"))
 DNS_TIMEOUT_SECONDS = float(os.getenv("DNS_TIMEOUT_SECONDS", "4"))
 WHOIS_TIMEOUT_SECONDS = float(os.getenv("WHOIS_TIMEOUT_SECONDS", "7"))
+TLS_TIMEOUT_SECONDS = float(os.getenv("TLS_TIMEOUT_SECONDS", "5"))
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash")
 
@@ -431,14 +434,24 @@ Return only the supplied response schema.
         )
 
     except Exception as exc:
+        # AI extraction is an enhancement, not a hard dependency. Preserve all
+        # deterministic findings and let the investigation continue even when
+        # Gemini is temporarily unavailable or both configured models fail.
         has_link_evidence = bool(link_evidence["detected_domains"] or link_evidence["malformed_urls"])
         return _result(
             name,
-            "PARTIAL" if has_link_evidence else "FAILED",
+            "PARTIAL",
             EvidenceProvenance.UNAVAILABLE,
-            {"entities": deterministic_entities.model_dump(mode="json"), "extraction_mode": "DETERMINISTIC_LINKS_ONLY"} if has_link_evidence else {},
-            error_code="GEMINI_EXTRACTION_FAILED",
-            error_message=f"{type(exc).__name__}: {str(exc)[:180]}; deterministic link extraction {'was retained' if has_link_evidence else 'found no usable links'}.",
+            {
+                "entities": deterministic_entities.model_dump(mode="json"),
+                "extraction_mode": "DETERMINISTIC_LINKS_ONLY",
+            },
+            error_code="GEMINI_EXTRACTION_UNAVAILABLE",
+            error_message=(
+                f"AI extraction unavailable ({type(exc).__name__}: {str(exc)[:180]}). "
+                + ("Deterministic link findings were retained." if has_link_evidence
+                   else "No link findings were extracted; investigation can continue with supplied details.")
+            ),
         )
 
 def _normalize_domain(value: str) -> str:
@@ -522,8 +535,316 @@ def _age_days(value: Optional[str]) -> Optional[int]:
             return None
 
 
+def _tls_certificate_observation(domain: str, resolved_ips: List[str]) -> Dict[str, Any]:
+    """Inspect HTTPS certificate metadata using a previously validated public IP.
+    The TCP connection is pinned to that IP; no HTTP page is requested.
+    """
+    context = ssl.create_default_context()
+    last_error = "TLS_CONNECTION_FAILED"
+    for ip in resolved_ips:
+        raw_socket = None
+        try:
+            raw_socket = socket.create_connection((ip, 443), timeout=TLS_TIMEOUT_SECONDS)
+            with context.wrap_socket(raw_socket, server_hostname=domain) as tls_socket:
+                certificate = tls_socket.getpeercert()
+            not_before = certificate.get("notBefore")
+            not_after = certificate.get("notAfter")
+            expiry_epoch = ssl.cert_time_to_seconds(not_after) if not_after else None
+            days_remaining = int((expiry_epoch - time.time()) // 86400) if expiry_epoch is not None else None
+            issuer_parts = [f"{key}={value}" for group in certificate.get("issuer", ()) for key, value in group]
+            sans = [value for kind, value in certificate.get("subjectAltName", ()) if kind == "DNS"]
+            return {
+                "tls_status": "VALID", "tls_checked": True,
+                "tls_issuer": ", ".join(issuer_parts)[:300],
+                "tls_not_before": not_before, "tls_not_after": not_after,
+                "tls_days_until_expiry": days_remaining,
+                "tls_subject_alt_names": sans[:30], "tls_hostname_verified": True,
+            }
+        except ssl.SSLCertVerificationError:
+            last_error = "TLS_CERTIFICATE_VERIFICATION_FAILED"
+            break
+        except (ssl.SSLError, OSError, TimeoutError):
+            last_error = "TLS_HANDSHAKE_OR_CONNECTION_FAILED"
+        finally:
+            if raw_socket is not None:
+                try: raw_socket.close()
+                except OSError: pass
+    return {
+        "tls_status": "INVALID" if last_error == "TLS_CERTIFICATE_VERIFICATION_FAILED" else "UNAVAILABLE",
+        "tls_checked": True, "tls_error": last_error, "tls_hostname_verified": False,
+    }
+
+
+def _head_request_pinned(url: str, domain: str, ip: str) -> Dict[str, Any]:
+    """Send HEAD to a previously validated public IP; do not follow redirects."""
+    parsed = urlsplit(url)
+    scheme = parsed.scheme.lower()
+    port = parsed.port or (443 if scheme == "https" else 80)
+    if scheme not in {"http", "https"} or port != (443 if scheme == "https" else 80):
+        raise ValueError("Only standard HTTP and HTTPS ports are inspected.")
+    path = parsed.path or "/"
+    if parsed.query:
+        path += "?" + parsed.query
+    path = path[:2048]
+    if any(ord(char) < 32 or ord(char) == 127 for char in path):
+        raise ValueError("URL path contains control characters.")
+    raw = socket.create_connection((ip, port), timeout=4)
+    sock = raw
+    try:
+        if scheme == "https":
+            sock = ssl.create_default_context().wrap_socket(raw, server_hostname=domain)
+        request = (
+            "HEAD " + path + " HTTP/1.1\r\n"
+            + "Host: " + domain + "\r\n"
+            + "User-Agent: ScamAirbag-LinkInspector/1.0\r\n"
+            + "Accept: */*\r\n"
+            + "Connection: close\r\n\r\n"
+        ).encode("ascii", errors="strict")
+        sock.sendall(request)
+        response = http.client.HTTPResponse(sock)
+        response.begin()
+        location = response.getheader("Location")
+        return {"status_code": response.status, "location": location[:2048] if location else None}
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
+def tool_link_redirect_inspection(url: str) -> ToolExecutionResult:
+    """Inspect up to five HEAD redirects; block non-public destinations."""
+    name = "link_redirect_inspection"
+    try:
+        current = url.strip()
+        parsed = urlsplit(current)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("A complete HTTP or HTTPS URL is required.")
+        if parsed.username or parsed.password:
+            raise ValueError("URLs containing embedded credentials are not inspected.")
+        initial_host = parsed.hostname.encode("idna").decode("ascii").lower().rstrip(".")
+        final_host = initial_host
+        hops = []
+        visited = set()
+        blocked = False
+        limit_reached = False
+        for index in range(6):
+            parsed = urlsplit(current)
+            host = (parsed.hostname or "").encode("idna").decode("ascii").lower().rstrip(".")
+            if not host or host in visited:
+                return _result(name, "SUCCESS", EvidenceProvenance.OBSERVED_EXTERNAL, {
+                    "initial_url": url[:2048], "initial_host": initial_host, "final_host": host or final_host,
+                    "redirect_hops": hops, "redirect_loop_detected": bool(host),
+                    "redirect_limit_reached": False, "inspection_method": "HTTP_HEAD",
+                })
+            visited.add(host)
+            scheme = parsed.scheme.lower()
+            port = parsed.port or (443 if scheme == "https" else 80)
+            if scheme not in {"http", "https"} or port != (443 if scheme == "https" else 80):
+                hops.append({"host": host, "status": "BLOCKED_UNSUPPORTED_SCHEME_OR_PORT"})
+                blocked = True
+                break
+            ips = _resolve_domain(host)
+            if not ips or any(not ipaddress.ip_address(ip).is_global for ip in ips):
+                hops.append({"host": host, "status": "BLOCKED_NON_PUBLIC_DNS"})
+                blocked = True
+                break
+            observation = _head_request_pinned(current, host, ips[0])
+            status = observation["status_code"]
+            location = observation["location"]
+            hops.append({"host": host, "status_code": status, "has_location": bool(location)})
+            final_host = host
+            if status not in {301, 302, 303, 307, 308} or not location:
+                break
+            from urllib.parse import urljoin
+            current = urljoin(current, location)
+        else:
+            limit_reached = True
+        final_parsed = urlsplit(current)
+        final_host = (final_parsed.hostname or final_host).lower()
+        return _result(name, "SUCCESS", EvidenceProvenance.OBSERVED_EXTERNAL, {
+            "initial_url": url[:2048], "initial_host": initial_host, "final_host": final_host,
+            "redirect_hops": hops,
+            "cross_domain_redirect": final_host != initial_host,
+            "https_downgrade": parsed.scheme.lower() == "https" and final_parsed.scheme.lower() == "http",
+            "redirect_limit_reached": limit_reached,
+            "blocked_unsafe_destination": blocked,
+            "inspection_method": "HTTP_HEAD",
+        })
+    except subprocess.TimeoutExpired:
+        return _result(name, "FAILED", EvidenceProvenance.UNAVAILABLE,
+                       error_code="REDIRECT_DNS_TIMEOUT", error_message="DNS lookup timed out.")
+    except (OSError, ssl.SSLError, http.client.HTTPException, ValueError) as exc:
+        return _result(name, "FAILED", EvidenceProvenance.UNAVAILABLE,
+                       error_code="REDIRECT_INSPECTION_FAILED",
+                       error_message=type(exc).__name__)
+
+
+
+
+_KNOWN_BRAND_DOMAINS = (
+    "paypal.com", "google.com", "microsoft.com", "apple.com",
+    "amazon.com", "netflix.com", "facebook.com", "instagram.com",
+    "whatsapp.com", "ebay.com", "adobe.com", "linkedin.com",
+    "dropbox.com", "docusign.com",
+)
+
+def _edit_distance_at_most_one(left: str, right: str) -> bool:
+    """Return whether two strings differ by at most one insertion/deletion/substitution."""
+    if abs(len(left) - len(right)) > 1:
+        return False
+    if left == right:
+        return True
+    i = j = differences = 0
+    while i < len(left) and j < len(right):
+        if left[i] == right[j]:
+            i += 1
+            j += 1
+            continue
+        differences += 1
+        if differences > 1:
+            return False
+        if len(left) > len(right):
+            i += 1
+        elif len(right) > len(left):
+            j += 1
+        else:
+            i += 1
+            j += 1
+    if i < len(left) or j < len(right):
+        differences += 1
+    return differences <= 1
+
+
+def _lookalike_domain_observation(domain: str) -> Dict[str, Any]:
+    """
+    Compare a hostname against a small, explicit brand-domain reference set.
+    This is a heuristic indicator only; similarity does not establish ownership
+    or malicious intent. The reference set is deliberately disclosed in output.
+    """
+    hostname = domain.rstrip(".").casefold()
+    labels = hostname.split(".")
+    unicode_host = hostname
+    try:
+        unicode_host = hostname.encode("ascii").decode("idna")
+    except (UnicodeError, ValueError):
+        pass
+
+    canonical = set(_KNOWN_BRAND_DOMAINS)
+    matched = []
+    # Brand name in a deceptive subdomain, e.g. paypal.com.attacker.test.
+    for brand_domain in _KNOWN_BRAND_DOMAINS:
+        brand_label = brand_domain.split(".", 1)[0]
+        if brand_domain != hostname and brand_label in labels[:-2]:
+            matched.append({
+                "brand_domain": brand_domain,
+                "match_type": "BRAND_NAME_IN_SUBDOMAIN",
+                "observed_label": brand_label,
+            })
+    # One-edit lookalikes on the same common public suffix.
+    if len(labels) >= 2:
+        observed_label = labels[-2]
+        observed_suffix = ".".join(labels[-1:])
+        for brand_domain in _KNOWN_BRAND_DOMAINS:
+            brand_labels = brand_domain.split(".")
+            if len(brand_labels) != 2 or brand_labels[-1] != observed_suffix:
+                continue
+            brand_label = brand_labels[0]
+            if observed_label != brand_label and _edit_distance_at_most_one(observed_label, brand_label):
+                matched.append({
+                    "brand_domain": brand_domain,
+                    "match_type": "ONE_EDIT_DOMAIN_SIMILARITY",
+                    "observed_label": observed_label,
+                })
+    has_punycode = any(label.startswith("xn--") for label in labels)
+    return {
+        "status": "POTENTIAL_MATCH" if matched or has_punycode else "NO_MATCH_IN_REFERENCE_SET",
+        "matches": matched[:5],
+        "idn_punycode_present": has_punycode,
+        "unicode_hostname": unicode_host if has_punycode else None,
+        "reference_domains": list(_KNOWN_BRAND_DOMAINS),
+        "method": "STATIC_BRAND_LIST_AND_ONE_EDIT_HEURISTIC",
+        "disclaimer": "Similarity is a lead for manual review, not proof of impersonation or fraud.",
+    }
+
+
+
+def inspect_email_authentication_headers(raw_headers: str) -> ToolExecutionResult:
+    """Parse SPF/DKIM/DMARC claims from pasted headers; does not verify signatures."""
+    name = "email_authentication_headers"
+    text = (raw_headers or "").strip()
+    if not text:
+        return _result(name, "NOT_APPLICABLE", EvidenceProvenance.UNAVAILABLE,
+                       {"header_parse_status": "EMPTY"}, "EMAIL_HEADERS_EMPTY",
+                       "No email headers were supplied.")
+    if len(text) > 12000:
+        return _result(name, "FAILED", EvidenceProvenance.UNAVAILABLE,
+                       {"header_parse_status": "TOO_LARGE"}, "EMAIL_HEADERS_TOO_LARGE",
+                       "Email headers exceed the 12,000 character limit.")
+    header_block = re.split(r"\r?\n\s*\r?\n", text, maxsplit=1)[0]
+    unfolded = re.sub(r"\r?\n[ \t]+", " ", header_block)
+    fields: Dict[str, List[str]] = {}
+    for line in unfolded.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip().lower()
+        if re.fullmatch(r"[a-z0-9-]{1,80}", key):
+            fields.setdefault(key, []).append(value.strip()[:2000])
+    if not fields:
+        return _result(name, "FAILED", EvidenceProvenance.UNAVAILABLE,
+                       {"header_parse_status": "NO_HEADERS"}, "EMAIL_HEADERS_UNPARSEABLE",
+                       "No recognizable email header fields were found.")
+    auth_results = []
+    for header in fields.get("authentication-results", [])[:10]:
+        authserv = header.split(";", 1)[0].strip()[:160]
+        methods = [{"method": m.group(1).lower(), "result": m.group(2).lower()}
+                   for m in re.finditer(r"\b(spf|dkim|dmarc)=([a-zA-Z_-]+)", header, re.I)]
+        auth_results.append({"authserv_id": authserv, "methods": methods})
+    received_spf = []
+    for value in fields.get("received-spf", [])[:10]:
+        match = re.match(r"\s*([a-zA-Z_-]+)", value)
+        received_spf.append({"result": match.group(1).lower() if match else "UNPARSED"})
+    def extract_domain(value: str) -> Optional[str]:
+        match = re.search(r"@([A-Za-z0-9.-]+)", value)
+        return match.group(1).lower().rstrip(".") if match else None
+    from_domain = extract_domain(fields.get("from", [""])[-1]) if fields.get("from") else None
+    return_path_domain = extract_domain(fields.get("return-path", [""])[-1]) if fields.get("return-path") else None
+    dkim_domains = []
+    for signature in fields.get("dkim-signature", [])[:10]:
+        match = re.search(r"(?:^|;)\s*d=([^;\s]+)", signature, re.I)
+        if match:
+            dkim_domains.append(match.group(1).lower().rstrip("."))
+    present = sorted(k for k in ("from", "return-path", "authentication-results",
+                                  "received-spf", "dkim-signature") if fields.get(k))
+    alignment = []
+    if from_domain and return_path_domain:
+        alignment.append({"type": "spf_identifier_comparison", "from_domain": from_domain,
+                          "return_path_domain": return_path_domain,
+                          "same_domain": from_domain == return_path_domain,
+                          "note": "This comparison alone does not establish SPF or DMARC alignment."})
+    if from_domain:
+        for dkim_domain in dkim_domains:
+            alignment.append({"type": "dkim_identifier_comparison", "from_domain": from_domain,
+                              "dkim_domain": dkim_domain, "same_domain": from_domain == dkim_domain,
+                              "note": "Exact equality is not a complete DMARC alignment check."})
+    return _result(name, "SUCCESS", EvidenceProvenance.USER_PROVIDED, {
+        "header_parse_status": "PARSED", "authentication_results": auth_results,
+        "received_spf_results": received_spf, "from_domain": from_domain,
+        "return_path_domain": return_path_domain, "dkim_signing_domains": dkim_domains,
+        "header_fields_present": present, "alignment_observations": alignment,
+        "limitations": [
+            "These are claims copied from supplied headers, not independently authenticated results.",
+            "Authentication-Results is trustworthy only when added by a known receiving mail server; pasted headers can be forged.",
+            "A DKIM-Signature header's presence does not prove its signature is valid.",
+            "No live SPF, DKIM cryptographic, or DMARC DNS verification is performed."
+        ],
+    })
+
+
+
 def tool_domain_intelligence(domain_or_url: str) -> ToolExecutionResult:
-    """Observe DNS and WHOIS. No web page is fetched; non-global IPs are blocked."""
+    """Observe DNS, WHOIS, and TLS certificate metadata; never fetch page content."""
     name = "domain_intelligence"
     try:
         domain = _normalize_domain(domain_or_url)
@@ -534,7 +855,7 @@ def tool_domain_intelligence(domain_or_url: str) -> ToolExecutionResult:
                         "dns_status": "NOT_CHECKED", "whois_status": "NOT_CHECKED"},
                        "INVALID_OR_BLOCKED_DOMAIN", str(exc))
 
-    base = {"domain": domain, "requested_input": str(domain_or_url)[:300]}
+    base = {"domain": domain, "requested_input": str(domain_or_url)[:300], "lookalike_observation": _lookalike_domain_observation(domain)}
     try:
         ips = _resolve_domain(domain)
     except subprocess.TimeoutExpired:
@@ -573,6 +894,7 @@ def tool_domain_intelligence(domain_or_url: str) -> ToolExecutionResult:
         "dns_status": "SUCCESS", "whois_status": "FAILED",
         "whois_available": False, "creation_date": None, "domain_age_days": None,
     }
+    data.update(_tls_certificate_observation(domain, ips))
     try:
         whois_data = _whois_lookup(domain)
         if whois_data.get("error") == "WHOIS_PACKAGE_MISSING":
@@ -606,9 +928,11 @@ TOOL_REGISTRY = {
     "paypal_order": tool_paypal_order,
     "paypal_subscription": tool_paypal_subscription,
     "domain_intelligence": tool_domain_intelligence,
+    "link_redirect_inspection": tool_link_redirect_inspection,
     "historical_pattern_search": search_similar_cases,
     "threat_intelligence": check_domain_reputation,
     "extract_message_context": tool_extract_message_context,
+    "email_authentication_headers": inspect_email_authentication_headers,
 }
 
 
@@ -626,12 +950,16 @@ def run_tool(tool_name: str, arguments: Dict[str, Any]) -> ToolExecutionResult:
             return function(order_id=str(arguments["order_id"]))
         if tool_name == "paypal_subscription":
             return function(subscription_id=str(arguments["subscription_id"]))
+        if tool_name == "link_redirect_inspection":
+            return function(url=str(arguments["url"]))
         if tool_name in {"domain_intelligence", "historical_pattern_search", "threat_intelligence"}:
             if tool_name == "domain_intelligence":
                 return function(domain_or_url=str(arguments["domain_or_url"]))
             if tool_name == "historical_pattern_search":
                 return function(domain=str(arguments["domain_or_url"]))
             return function(domain_or_url=str(arguments["domain_or_url"]))
+        if tool_name == "email_authentication_headers":
+            return function(raw_headers=str(arguments["email_headers"]))
         if tool_name == "extract_message_context":
             return function(user_text=arguments.get("user_text"))
     except KeyError as exc:

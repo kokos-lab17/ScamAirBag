@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from schemas import (
@@ -55,6 +56,19 @@ GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash")
 MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "12"))
 MAX_MODEL_TURNS = int(os.getenv("MAX_MODEL_TURNS", "24"))
 
+
+def _fallback_model_name(active_model: str) -> str:
+    """Return a distinct, fast fallback even if env settings duplicate the primary."""
+    configured = GEMINI_FALLBACK_MODEL.strip()
+    if configured and configured != active_model:
+        return configured
+    # A duplicated primary/fallback setting silently disables fallback otherwise.
+    return (
+        "gemini-3.5-flash"
+        if active_model == "gemini-3.5-flash-lite"
+        else "gemini-3.5-flash-lite"
+    )
+
 # Tool contracts are intentionally narrow. The model can select only these
 # names and arguments; run_tool() independently enforces the same allowlist.
 TOOL_ARGUMENTS = {
@@ -63,6 +77,7 @@ TOOL_ARGUMENTS = {
     "paypal_order": {"order_id"},
     "paypal_subscription": {"subscription_id"},
     "domain_intelligence": {"domain_or_url"},
+    "link_redirect_inspection": {"url"},
     "historical_pattern_search": {"domain_or_url"},
     "threat_intelligence": {"domain_or_url"},
 }
@@ -86,8 +101,13 @@ TOOL_DESCRIPTIONS = {
         "the identifier is known to be a subscription ID."
     ),
     "domain_intelligence": (
-        "Observe DNS and WHOIS information for one domain or URL extracted from "
-        "the submitted message. This tool does not fetch the website."
+        "Observe DNS, WHOIS, and TLS certificate metadata for one extracted domain. "
+        "This tool does not fetch website content."
+    ),
+    "link_redirect_inspection": (
+        "Inspect the HTTP HEAD redirect chain for one complete URL explicitly present "
+        "in the submitted message. It blocks non-public destinations and does not "
+        "download page content. Use only on extracted URLs, never invented URLs."
     ),
     "historical_pattern_search": (
         "Search Elastic for prior user-consented, minimized investigation records "
@@ -115,7 +135,7 @@ INVESTIGATION:
 - If user_text exists, extract its context before relying on claims in it.
 - If the request has a recognized identifier_hint and identifier, perform the
   matching PayPal lookup unless it has already been attempted.
-- If message extraction found domains, use domain intelligence, VirusTotal when configured,
+- If message extraction found complete URLs, inspect their redirect chains. If it found domains, use domain intelligence, VirusTotal when configured,
   and Elastic historical search when configured. Do not repeat the same domain/input.
 - Historical matches are contextual only and must never be treated as proof of fraud.
 - Use tool results to decide whether another check adds material evidence.
@@ -377,8 +397,8 @@ def _required_checks_remaining(
     attempted = {item.tool_name for item in results}
     attempted_domain_inputs = set()
     for step in steps:
-        if step.decision.selected_tool in {"domain_intelligence", "historical_pattern_search", "threat_intelligence"}:
-            raw = step.decision.arguments.get("domain_or_url")
+        if step.decision.selected_tool in {"domain_intelligence", "historical_pattern_search", "threat_intelligence", "link_redirect_inspection"}:
+            raw = step.decision.arguments.get("url") if step.decision.selected_tool == "link_redirect_inspection" else step.decision.arguments.get("domain_or_url")
             if raw:
                 attempted_domain_inputs.add((step.decision.selected_tool, _domain_input_key(str(raw))))
     remaining: List[Tuple[str, Dict[str, Any], str]] = []
@@ -411,20 +431,49 @@ def _required_checks_remaining(
                               f"The identified {candidate_hint.lower()} identifier has not been checked with PayPal."))
 
     if extracted:
-        for domain in list(dict.fromkeys(extracted.detected_domains)):
-            key = _domain_input_key(str(domain))
-            if ("domain_intelligence", key) not in attempted_domain_inputs:
-                remaining.append(("domain_intelligence", {"domain_or_url": domain},
-                                  "DNS and WHOIS evidence has not been checked for this domain."))
+        for url in list(dict.fromkeys(extracted.detected_urls)):
+            key = _domain_input_key(str(url))
+            if ("link_redirect_inspection", key) not in attempted_domain_inputs:
+                remaining.append(("link_redirect_inspection", {"url": url},
+                                  "The submitted URL redirect chain has not been inspected."))
                 break
-            if virustotal_is_configured() and ("threat_intelligence", key) not in attempted_domain_inputs:
-                remaining.append(("threat_intelligence", {"domain_or_url": domain},
-                                  "External reputation evidence has not been checked for this domain."))
-                break
-            if elastic_is_configured() and ("historical_pattern_search", key) not in attempted_domain_inputs:
-                remaining.append(("historical_pattern_search", {"domain_or_url": domain},
-                                  "Historical pattern intelligence has not been checked for this domain."))
-                break
+
+    # PayPal's verified seller/payee email fields are useful independent
+    # evidence even when Watchtower starts from a webhook ID without a message.
+    observed_domains = list(extracted.detected_domains) if extracted else []
+    for item in results:
+        if item.status != "SUCCESS":
+            continue
+        emails = []
+        if item.tool_name == "paypal_invoice":
+            seller_email = item.data.get("seller_email")
+            if isinstance(seller_email, str):
+                emails.append(seller_email)
+        elif item.tool_name == "paypal_order":
+            for unit in item.data.get("purchase_units") or []:
+                if isinstance(unit, dict) and isinstance(unit.get("payee_email"), str):
+                    emails.append(unit["payee_email"])
+        # Subscription subscriber_email is the payer, not the merchant/seller.
+        for email in emails:
+            domain = email.rsplit("@", 1)[-1].strip().lower().rstrip(".")
+            if "@" in email and "." in domain and re.fullmatch(r"[a-z0-9.-]+", domain):
+                if domain not in observed_domains:
+                    observed_domains.append(domain)
+
+    for domain in observed_domains:
+        key = _domain_input_key(str(domain))
+        if ("domain_intelligence", key) not in attempted_domain_inputs:
+            remaining.append(("domain_intelligence", {"domain_or_url": domain},
+                              "The verified PayPal seller/payee email domain has not been checked."))
+            break
+        if virustotal_is_configured() and ("threat_intelligence", key) not in attempted_domain_inputs:
+            remaining.append(("threat_intelligence", {"domain_or_url": domain},
+                              "External reputation evidence has not been checked for this seller/payee domain."))
+            break
+        if elastic_is_configured() and ("historical_pattern_search", key) not in attempted_domain_inputs:
+            remaining.append(("historical_pattern_search", {"domain_or_url": domain},
+                              "Historical pattern intelligence has not been checked for this seller/payee domain."))
+            break
     return remaining
 
 
@@ -447,7 +496,7 @@ def _build_prompt(
                 "tool": step.decision.selected_tool,
                 "rationale": step.decision.rationale,
                 "result_status": step.result.status if step.result else None,
-                "domain_input": step.decision.arguments.get("domain_or_url") if step.decision.selected_tool in {"domain_intelligence", "historical_pattern_search", "threat_intelligence"} else None,
+                "domain_input": step.decision.arguments.get("domain_or_url") if step.decision.selected_tool in {"domain_intelligence", "historical_pattern_search", "threat_intelligence"} else step.decision.arguments.get("url") if step.decision.selected_tool == "link_redirect_inspection" else None,
             }
             for step in steps[-6:]
         ],
@@ -485,6 +534,68 @@ def run_investigation(
         InvestigationEventType.INVESTIGATION_STARTED,
         "Investigation started.",
     )
+
+    if input_context.email_headers and input_context.email_headers.strip():
+        header_result = run_tool("email_authentication_headers", {"email_headers": input_context.email_headers})
+        results.append(header_result)
+        trace.steps.append(InvestigationStep(
+            step_number=1,
+            decision=AgentDecision(
+                action="CALL_TOOL", selected_tool="email_authentication_headers",
+                rationale="Parse supplied raw email authentication headers.",
+                arguments={"email_headers": "[provided]"},
+            ),
+            result=header_result,
+        ))
+        _emit(event_callback, InvestigationEventType.TOOL_COMPLETED,
+              "Email authentication header observations parsed.", step_number=1,
+              tool_name="email_authentication_headers",
+              data={"status": header_result.status, "error_code": header_result.error_code})
+
+    # PayPal IDs supplied directly by a trusted UI field or verified webhook
+    # are deterministic evidence targets. Do this lookup before asking Gemini
+    # to choose tools, so a model outage cannot prevent the core PayPal check.
+    direct_hint = (input_context.identifier_hint or "UNKNOWN").strip().upper()
+    direct_lookup = {
+        "INVOICE": ("paypal_invoice", "invoice_id"),
+        "ORDER": ("paypal_order", "order_id"),
+        "SUBSCRIPTION": ("paypal_subscription", "subscription_id"),
+    }
+    if input_context.identifier and direct_hint in direct_lookup:
+        tool_name, argument_name = direct_lookup[direct_hint]
+        _emit(
+            event_callback,
+            InvestigationEventType.TOOL_STARTED,
+            f"Verifying the supplied PayPal {direct_hint.lower()} directly with PayPal Sandbox.",
+            step_number=len(trace.steps) + 1,
+            tool_name=tool_name,
+        )
+        direct_result = run_tool(tool_name, {argument_name: input_context.identifier})
+        results.append(direct_result)
+        direct_decision = AgentDecision(
+            action="CALL_TOOL",
+            selected_tool=tool_name,
+            rationale=f"Verify the explicitly supplied {direct_hint.lower()} identifier against PayPal Sandbox.",
+            arguments={argument_name: input_context.identifier},
+        )
+        trace.steps.append(InvestigationStep(
+            step_number=len(trace.steps) + 1,
+            decision=direct_decision,
+            result=direct_result,
+        ))
+        _emit(
+            event_callback,
+            InvestigationEventType.TOOL_COMPLETED,
+            f"PayPal {direct_hint.lower()} lookup returned {direct_result.status.lower()}.",
+            step_number=len(trace.steps),
+            tool_name=tool_name,
+            data={
+                "status": direct_result.status,
+                "provenance": direct_result.provenance.value,
+                "error_code": direct_result.error_code,
+                "summary": _safe_event_summary(direct_result),
+            },
+        )
 
     if not api_key:
         scorecard, outcomes = score_investigation(
@@ -582,16 +693,17 @@ def run_investigation(
                 except (TypeError, ValueError):
                     status_code = None
 
-                if status_code not in {500, 502, 503, 504} or active_model == GEMINI_FALLBACK_MODEL:
+                if status_code not in {500, 502, 503, 504}:
                     raise
 
+                fallback_model = _fallback_model_name(active_model)
                 logger.warning(
-                    "Primary Gemini model %s returned HTTP %s; switching to %s.",
+                    "Gemini model %s returned HTTP %s; switching to fallback %s.",
                     active_model,
                     status_code,
-                    GEMINI_FALLBACK_MODEL,
+                    fallback_model,
                 )
-                active_model = GEMINI_FALLBACK_MODEL
+                active_model = fallback_model
                 response = client.models.generate_content(
                     model=active_model,
                     contents=contents,
