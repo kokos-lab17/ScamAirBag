@@ -280,6 +280,8 @@ def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,
             return {"registered": True, "already_registered": True, "webhook_id": existing,
                     "webhook_url": os.getenv("WATCHTOWER_PUBLIC_API_URL", "").rstrip("/") + "/api/v1/watchtower/paypal/webhook",
                     "event_types": list(PAYPAL_EVENT_HINTS.keys())}
+        if "sandbox" not in PAYPAL_BASE_URL.lower():
+            raise HTTPException(status_code=400, detail="Watchtower webhook registration is restricted to PayPal Sandbox.")
         public_url = os.getenv("WATCHTOWER_PUBLIC_API_URL", "").strip().rstrip("/")
         if not public_url.startswith("https://"):
             raise HTTPException(status_code=400, detail="Set WATCHTOWER_PUBLIC_API_URL to the public HTTPS API origin before registering.")
