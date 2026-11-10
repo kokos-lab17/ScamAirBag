@@ -80,6 +80,9 @@ class ExtractedEntities(BaseModel):
     claimed_seller_name: Optional[str] = Field(default=None, description="Name the seller identifies as")
     claimed_seller_email: Optional[str] = Field(default=None, description="Email address claimed by the seller")
     claimed_recipient_name: Optional[str] = Field(default=None, description="Payment recipient name claimed in text")
+    claimed_amount: Optional[str] = Field(default=None, description="Payment amount explicitly stated in the message")
+    claimed_currency_code: Optional[str] = Field(default=None, description="ISO currency code only when explicitly stated or unambiguous")
+    claimed_amount_quote: Optional[str] = Field(default=None, description="Short exact quote supporting the claimed amount")
     extracted_identifier: Optional[str] = Field(default=None, description="Discovered invoice, order, or sub ID")
     identifier_hint: Optional[str] = Field(default=None, description="Inferred ID type: 'INVOICE', 'ORDER', etc.")
     detected_urls: List[str] = Field(
