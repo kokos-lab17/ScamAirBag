@@ -415,7 +415,9 @@
             fetch(`${base}/api/v1/watchtower/status`),
             fetch(`${base}/api/v1/watchtower/events?limit=20`, { headers: { "X-Watchtower-Token": $("watchtowerToken").value.trim() } })
           ]);
-          if (!statusResponse.ok) throw new Error("Watchtower API unavailable");\n          if (eventsResponse.status === 401) throw new Error("Enter the Watchtower access token to view event history.");\n          if (!eventsResponse.ok) throw new Error("Unable to load Watchtower event history.");
+          if (!statusResponse.ok) throw new Error("Watchtower API unavailable");
+          if (eventsResponse.status === 401) throw new Error("Enter the Watchtower access token to view event history.");
+          if (!eventsResponse.ok) throw new Error("Unable to load Watchtower event history.");
           const status = await statusResponse.json(); const data = await eventsResponse.json();
           $("watchtowerState").textContent = status.paypal_webhook_configured ? "PAYPAL WEBHOOK READY" : "LISTENER READY · WEBHOOK NOT CONFIGURED";
           $("simulateInvoiceButton").disabled = !status.demo_enabled || !$("watchtowerToken").value.trim();
@@ -484,7 +486,7 @@
         try {
           const base = $("apiBase").value.trim().replace(/\\/+$/, "");
           const response = await fetch(`${base}/api/v1/watchtower/demo/simulate-invoice`, {
-            method: "POST", headers: { "Content-Type": "application/json" },
+            method: "POST", headers: { "Content-Type": "application/json", "X-Watchtower-Token": $("watchtowerToken").value.trim() },
             body: JSON.stringify({ identifier, identifier_hint: "INVOICE" })
           });
           const result = await response.json();
