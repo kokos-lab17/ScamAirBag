@@ -1104,7 +1104,7 @@ def test_amount_comparison_rejects_quote_with_different_numeric_value():
 
     entities = ExtractedEntities(
         claimed_amount="125.00", claimed_currency_code="USD",
-        claimed_amount_quote="Pay USD 100.00 today",
+        claimed_amount_quote="pay USD 100.00 today",
     )
     invoice = ToolExecutionResult(
         tool_name="paypal_invoice", status="SUCCESS",
@@ -1121,7 +1121,7 @@ def test_amount_comparison_does_not_guess_currency_from_dollar_symbol():
 
     entities = ExtractedEntities(
         claimed_amount="100.00", claimed_currency_code="USD",
-        claimed_amount_quote="Pay $100.00 today",
+        claimed_amount_quote="pay $100.00 today",
     )
     invoice = ToolExecutionResult(
         tool_name="paypal_invoice", status="SUCCESS",
@@ -1138,7 +1138,7 @@ def test_amount_comparison_accepts_unambiguous_rupee_symbol():
 
     entities = ExtractedEntities(
         claimed_amount="100.00", claimed_currency_code="INR",
-        claimed_amount_quote="Pay ₹100.00 today",
+        claimed_amount_quote="pay ₹100.00 today",
     )
     invoice = ToolExecutionResult(
         tool_name="paypal_invoice", status="SUCCESS",
