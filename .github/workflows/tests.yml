@@ -5,9 +5,11 @@ on:
     branches:
       - assistant/fix-local-api-routing
       - feature/investigation-refinement
+      - production-hardening
   pull_request:
     branches:
       - feature/investigation-refinement
+      - production-hardening
 
 permissions:
   contents: read
