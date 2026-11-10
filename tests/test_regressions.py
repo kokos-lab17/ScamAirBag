@@ -982,3 +982,21 @@ def test_production_investigation_fails_closed_without_configured_token(monkeypa
     )
     assert response.status_code == 503
     assert "not been configured" in response.json()["detail"]
+
+
+def test_direct_verified_paypal_lookup_is_preserved_when_gemini_is_unavailable(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(agent, "run_tool", lambda name, args: ToolExecutionResult(
+        tool_name=name, status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"invoice_id": args.get("invoice_id"), "status": "SENT",
+              "amount": {"value": "10.00", "currency_code": "USD"}},
+    ))
+    trace = agent.run_investigation(
+        InvestigationInput(identifier="INV-123", identifier_hint="INVOICE")
+    )
+    assert trace.status == "PARTIAL"
+    assert trace.error_code == "GEMINI_API_KEY_MISSING"
+    assert trace.final_scorecard is not None
+    assert any(item.source_name == "paypal_invoice" and item.status == "SUCCESS"
+               for item in trace.source_outcomes)
