@@ -44,6 +44,11 @@ RULE_WEIGHTS = {
     "HIGH_PRESSURE_LANGUAGE": 10,
     "UNUSUAL_PAYMENT_INSTRUCTION": 25,
     "DOMAIN_DOES_NOT_RESOLVE": 0,
+    "PAYMENT_AMOUNT_MISMATCH": 40,
+    "POTENTIAL_BRAND_LOOKALIKE": 20,
+    "HTTPS_TO_HTTP_DOWNGRADE": 20,
+    "CROSS_DOMAIN_REDIRECT": 10,
+    "EMAIL_AUTHENTICATION_FAILURE_CLAIM": 10,
 }
 
 SUCCESS_STATUSES = {"SUCCESS", "VERIFIED", "COMPLETED"}
@@ -529,7 +534,7 @@ def _build_findings(
             findings.append(_make_finding(
                 "PAYMENT_AMOUNT_MISMATCH",
                 "The payment amount stated in the message differs from the amount returned by PayPal.",
-                RiskLevel.HIGH, EvidenceProvenance.VERIFIED_PAYPAL, 40, amount_evidence or "",
+                RiskLevel.HIGH, EvidenceProvenance.VERIFIED_PAYPAL, RULE_WEIGHTS["PAYMENT_AMOUNT_MISMATCH"], amount_evidence or "",
             ))
         elif amount_match is None and entities.claimed_amount:
             unverified_claims.append(amount_evidence or "The stated amount could not be verified against PayPal.")
@@ -694,7 +699,7 @@ def _build_findings(
             findings.append(_make_finding(
                 "POTENTIAL_BRAND_LOOKALIKE",
                 "The observed hostname resembles a known brand domain or places a brand name in a deceptive subdomain. Similarity is not proof of impersonation.",
-                RiskLevel.MEDIUM, EvidenceProvenance.OBSERVED_EXTERNAL, 20,
+                RiskLevel.MEDIUM, EvidenceProvenance.OBSERVED_EXTERNAL, RULE_WEIGHTS["POTENTIAL_BRAND_LOOKALIKE"],
                 f"Observed domain: {domain_result.data.get('domain')}; heuristic matches: {matches[:3]}; reference set: {observation.get('reference_domains', [])}.",
             ))
 
@@ -706,14 +711,14 @@ def _build_findings(
             findings.append(_make_finding(
                 "HTTPS_TO_HTTP_DOWNGRADE",
                 "The submitted link redirects from HTTPS to HTTP, removing transport encryption for the destination.",
-                RiskLevel.HIGH, EvidenceProvenance.OBSERVED_EXTERNAL, 20,
+                RiskLevel.HIGH, EvidenceProvenance.OBSERVED_EXTERNAL, RULE_WEIGHTS["HTTPS_TO_HTTP_DOWNGRADE"],
                 f"Initial host: {redirect.data.get('initial_host')}; final host: {redirect.data.get('final_host')}.",
             ))
         if redirect.data.get("cross_domain_redirect"):
             findings.append(_make_finding(
                 "CROSS_DOMAIN_REDIRECT",
                 "The submitted link redirects to a different hostname. This can be legitimate, but the final destination should be checked independently.",
-                RiskLevel.MEDIUM, EvidenceProvenance.OBSERVED_EXTERNAL, 10,
+                RiskLevel.MEDIUM, EvidenceProvenance.OBSERVED_EXTERNAL, RULE_WEIGHTS["CROSS_DOMAIN_REDIRECT"],
                 f"Initial host: {redirect.data.get('initial_host')}; final host: {redirect.data.get('final_host')}; hops: {redirect.data.get('redirect_hops', [])[:5]}.",
             ))
 
@@ -731,7 +736,7 @@ def _build_findings(
             findings.append(_make_finding(
                 "EMAIL_AUTHENTICATION_FAILURE_CLAIM",
                 "The pasted email headers contain SPF, DKIM, or DMARC failure claims. These header values were not independently authenticated.",
-                RiskLevel.MEDIUM, EvidenceProvenance.USER_PROVIDED, 10,
+                RiskLevel.MEDIUM, EvidenceProvenance.USER_PROVIDED, RULE_WEIGHTS["EMAIL_AUTHENTICATION_FAILURE_CLAIM"],
                 f"Header claims: {failures[:10]}; source: user-pasted email headers.",
             ))
 
