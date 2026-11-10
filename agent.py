@@ -478,7 +478,15 @@ def run_investigation(
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(
+                timeout=30000,
+                retry_options=types.HttpRetryOptions(
+                    attempts=1,
+                ),
+            ),
+        )
         active_model = GEMINI_MODEL
         declaration = _decision_function_declaration(types)
         gemini_tool = types.Tool(function_declarations=[declaration])
