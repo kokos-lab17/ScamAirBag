@@ -653,3 +653,31 @@ def test_watchtower_alert_policy_flags_high_risk_and_incomplete_results():
     partial_alert = _build_watchtower_alert(partial)
     assert partial_alert["level"] == "INCOMPLETE"
     assert partial_alert["needs_attention"] is True
+
+
+def test_coverage_tracks_verified_paypal_seller_domain_without_message_text():
+    invoice = ToolExecutionResult(
+        tool_name="paypal_invoice", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"invoice_id": "INV-2", "seller_email": "billing@merchant-example.test"},
+    )
+    domain = ToolExecutionResult(
+        tool_name="domain_intelligence", status="SUCCESS",
+        provenance=EvidenceProvenance.OBSERVED_EXTERNAL,
+        data={"domain": "merchant-example.test", "dns_status": "SUCCESS",
+              "whois_status": "SUCCESS", "whois_available": True},
+    )
+    outcomes = build_source_outcomes(InvestigationInput(), None, [invoice, domain])
+    names = {item.source_name for item in outcomes}
+    assert "domain_dns:merchant-example.test" in names
+    assert "domain_whois:merchant-example.test" in names
+
+
+def test_coverage_does_not_treat_subscription_payer_as_seller_domain():
+    subscription = ToolExecutionResult(
+        tool_name="paypal_subscription", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"subscription_id": "SUB-2", "subscriber_email": "payer@example.test"},
+    )
+    outcomes = build_source_outcomes(InvestigationInput(), None, [subscription])
+    assert not any(item.source_name == "domain_dns:example.test" for item in outcomes)
