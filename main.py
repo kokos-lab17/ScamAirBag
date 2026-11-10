@@ -335,6 +335,38 @@ async def health() -> Dict[str, str]:
     return {"status": "ok", "service": "scamairbag-api", "version": APP_VERSION}
 
 
+@app.get("/ready")
+async def readiness() -> JSONResponse:
+    """Report configuration readiness without exposing secret values or making paid API calls."""
+    paypal_configured = bool(os.getenv("PAYPAL_CLIENT_ID") and os.getenv("PAYPAL_CLIENT_SECRET"))
+    gemini_configured = bool(os.getenv("GEMINI_API_KEY"))
+    service_token_configured = bool(os.getenv("SCAM_AIRBAG_API_TOKEN") or os.getenv("WATCHTOWER_INGEST_TOKEN"))
+    signing_key_configured = bool(_evidence_signing_key())
+    db_path = os.getenv("WATCHTOWER_DB_PATH", "watchtower.sqlite3")
+    storage_directory = os.path.dirname(os.path.abspath(db_path))
+    storage_writable = os.path.isdir(storage_directory) and os.access(storage_directory, os.W_OK)
+    checks = {
+        "gemini_configured": gemini_configured,
+        "paypal_credentials_configured": paypal_configured,
+        "production_service_token_configured": service_token_configured if APP_ENV in {"production", "prod"} else True,
+        "evidence_signing_key_configured": signing_key_configured,
+        "watchtower_storage_directory_writable": storage_writable,
+        "paypal_webhook_id_configured": bool(os.getenv("PAYPAL_WEBHOOK_ID")),
+    }
+    required = [
+        "gemini_configured", "paypal_credentials_configured",
+        "production_service_token_configured", "evidence_signing_key_configured",
+        "watchtower_storage_directory_writable",
+    ]
+    ready = all(checks[key] for key in required)
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={"status": "ready" if ready else "degraded", "service": "scamairbag-api",
+                 "version": APP_VERSION, "checks": checks,
+                 "note": "Readiness checks validate configuration only; they do not perform live provider API calls."},
+    )
+
+
 @app.post("/api/v1/investigate", response_model=None)
 async def investigate(payload: InvestigationRequest) -> JSONResponse:
     """
