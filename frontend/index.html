@@ -76,7 +76,7 @@
         <div class="field"><label for="watchtowerInvoice">PayPal Sandbox invoice ID</label><input id="watchtowerInvoice" maxlength="200" placeholder="Enter an existing Sandbox invoice ID"></div>
         <div class="field" style="display:flex;align-items:end"><button id="simulateInvoiceButton" class="btn" type="button" disabled>Simulate incoming invoice event</button></div>
       </div>
-      <div class="actions"><span id="watchtowerActionStatus" class="status">Loading event history…</span><button id="refreshWatchtower" class="btn secondary" type="button">Refresh activity</button></div>
+      <div class="actions"><span id="watchtowerActionStatus" class="status">Loading event history…</span><button id="registerPaypalWebhook" class="btn secondary" type="button" disabled>Register PayPal webhook</button><button id="refreshWatchtower" class="btn secondary" type="button">Refresh activity</button></div>
       <div id="watchtowerAlerts" class="timeline" style="margin-top:14px"><div class="status">No alerts yet.</div></div>
       <div id="watchtowerEvents" class="timeline" style="margin-top:16px"><div class="status">No events loaded.</div></div>\n      <div id="watchtowerDetail" class="detail" style="margin-top:16px"><div class="detail-title">Event evidence</div><div class="status">Select an event to inspect its investigation evidence.</div></div>
       <div class="hint">The simulator is explicitly labelled. It triggers an automatic investigation and attempts a real PayPal Sandbox invoice lookup; it does not fabricate invoice evidence or represent a real webhook.</div>
@@ -418,7 +418,7 @@
           if (!statusResponse.ok) throw new Error("Watchtower API unavailable");
           const status = await statusResponse.json();
           $("watchtowerState").textContent = status.paypal_webhook_configured ? "PAYPAL WEBHOOK READY" : "LISTENER READY · WEBHOOK NOT CONFIGURED";
-          $("simulateInvoiceButton").disabled = !status.demo_enabled || !$("watchtowerToken").value.trim();
+          $("simulateInvoiceButton").disabled = !status.demo_enabled || !$("watchtowerToken").value.trim();\n          $("registerPaypalWebhook").disabled = !status.public_api_url_configured || !status.paypal_webhook_configured && !$("watchtowerToken").value.trim();
           $("watchtowerNote").textContent = `${status.monitoring_claim} PayPal webhook ${status.paypal_webhook_configured ? "is configured" : "is not configured"} at ${status.paypal_webhook_path}.`;
           const alertsHost = $("watchtowerAlerts"); alertsHost.replaceChildren();
           if (eventsResponse.status === 401) {
@@ -482,6 +482,24 @@
       $("watchtowerToken").addEventListener("input", () => {
         $("simulateInvoiceButton").disabled = !$("watchtowerToken").value.trim();
         refreshWatchtower();
+      });
+      $("registerPaypalWebhook").addEventListener("click", async () => {
+        const token = $("watchtowerToken").value.trim();
+        if (!token) { $("watchtowerActionStatus").textContent = "Enter the Watchtower access token first."; return; }
+        const button = $("registerPaypalWebhook"); button.disabled = true;
+        $("watchtowerActionStatus").textContent = "Registering webhook with PayPal Sandbox…";
+        try {
+          const base = $("apiBase").value.trim().replace(/\\/+$/, "");
+          const response = await fetch(`${base}/api/v1/watchtower/paypal/register`, {
+            method: "POST", headers: { "X-Watchtower-Token": token }
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "PayPal webhook registration failed.");
+          $("watchtowerActionStatus").textContent = `PayPal webhook ${result.already_registered ? "already registered" : "registered"} · ID: ${result.webhook_id}. Add PAYPAL_WEBHOOK_ID to Render environment variables as a persistence backup.`;
+          await refreshWatchtower();
+        } catch (error) {
+          $("watchtowerActionStatus").textContent = error.message;
+        } finally { button.disabled = false; }
       });
       $("refreshWatchtower").addEventListener("click", refreshWatchtower);
       $("simulateInvoiceButton").addEventListener("click", async () => {
