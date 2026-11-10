@@ -76,6 +76,7 @@ TOOL_ARGUMENTS = {
     "paypal_order": {"order_id"},
     "paypal_subscription": {"subscription_id"},
     "domain_intelligence": {"domain_or_url"},
+    "link_redirect_inspection": {"url"},
     "historical_pattern_search": {"domain_or_url"},
     "threat_intelligence": {"domain_or_url"},
 }
@@ -99,8 +100,13 @@ TOOL_DESCRIPTIONS = {
         "the identifier is known to be a subscription ID."
     ),
     "domain_intelligence": (
-        "Observe DNS and WHOIS information for one domain or URL extracted from "
-        "the submitted message. This tool does not fetch the website."
+        "Observe DNS, WHOIS, and TLS certificate metadata for one extracted domain. "
+        "This tool does not fetch website content."
+    ),
+    "link_redirect_inspection": (
+        "Inspect the HTTP HEAD redirect chain for one complete URL explicitly present "
+        "in the submitted message. It blocks non-public destinations and does not "
+        "download page content. Use only on extracted URLs, never invented URLs."
     ),
     "historical_pattern_search": (
         "Search Elastic for prior user-consented, minimized investigation records "
@@ -424,6 +430,12 @@ def _required_checks_remaining(
                               f"The identified {candidate_hint.lower()} identifier has not been checked with PayPal."))
 
     if extracted:
+        for url in list(dict.fromkeys(extracted.detected_urls)):
+            key = _domain_input_key(str(url))
+            if ("link_redirect_inspection", key) not in attempted_domain_inputs:
+                remaining.append(("link_redirect_inspection", {"url": url},
+                                  "The submitted URL redirect chain has not been inspected."))
+                break
         for domain in list(dict.fromkeys(extracted.detected_domains)):
             key = _domain_input_key(str(domain))
             if ("domain_intelligence", key) not in attempted_domain_inputs:
