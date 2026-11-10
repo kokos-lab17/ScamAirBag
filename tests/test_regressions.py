@@ -952,3 +952,33 @@ def test_evidence_manifest_metadata_is_covered_by_root_hash():
     )
     manifest["created_at"] = "2000-01-01T00:00:00+00:00"
     assert verify_evidence_manifest(manifest)["valid"] is False
+
+
+def test_production_investigation_requires_service_token(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "APP_ENV", "production")
+    monkeypatch.setenv("WATCHTOWER_INGEST_TOKEN", "production-test-token")
+    monkeypatch.delenv("SCAM_AIRBAG_API_TOKEN", raising=False)
+    client = TestClient(main.app)
+    denied = client.post("/api/v1/investigate", json={"user_text": "test"})
+    assert denied.status_code == 401
+    allowed = client.post(
+        "/api/v1/investigate", json={"user_text": "test"},
+        headers={"X-Watchtower-Token": "production-test-token"},
+    )
+    # The request passes the auth middleware and reaches normal validation/runtime.
+    assert allowed.status_code != 401
+
+
+def test_production_investigation_fails_closed_without_configured_token(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "APP_ENV", "production")
+    monkeypatch.delenv("WATCHTOWER_INGEST_TOKEN", raising=False)
+    monkeypatch.delenv("SCAM_AIRBAG_API_TOKEN", raising=False)
+    response = TestClient(main.app).post(
+        "/api/v1/investigate", json={"user_text": "test"}
+    )
+    assert response.status_code == 503
+    assert "not been configured" in response.json()["detail"]
