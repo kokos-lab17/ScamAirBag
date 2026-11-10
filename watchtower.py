@@ -4,7 +4,7 @@ import asyncio, hmac, json, os, sqlite3, uuid
 from datetime import datetime, timezone\nfrom contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request\nimport requests\nfrom tools import PAYPAL_BASE_URL, PAYPAL_TIMEOUT_SECONDS, _get_paypal_access_token
 from pydantic import BaseModel, Field, field_validator
 from agent import run_investigation
 from schemas import InvestigationInput, InvestigationTrace
@@ -99,6 +99,31 @@ async def _investigate_event(event_id,public_trace):
 def _schedule(event_id,public_trace):
     task=asyncio.create_task(_investigate_event(event_id,public_trace)); _TASKS.add(task); task.add_done_callback(_TASKS.discard)
 
+
+def _verify_paypal_signature(headers: Dict[str, str], event: Dict[str, Any]) -> bool:
+    webhook_id = os.getenv("PAYPAL_WEBHOOK_ID", "").strip()
+    if not webhook_id:
+        return False
+    required = {
+        "transmission_id": headers.get("paypal-transmission-id"),
+        "transmission_time": headers.get("paypal-transmission-time"),
+        "cert_url": headers.get("paypal-cert-url"),
+        "auth_algo": headers.get("paypal-auth-algo"),
+        "transmission_sig": headers.get("paypal-transmission-sig"),
+    }
+    if not all(required.values()):
+        return False
+    token = _get_paypal_access_token()
+    response = requests.post(
+        f"{PAYPAL_BASE_URL}/v1/notifications/verify-webhook-signature",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={**required, "webhook_id": webhook_id, "webhook_event": event},
+        timeout=PAYPAL_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return response.json().get("verification_status") == "SUCCESS"
+
+
 def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,Any]])->APIRouter:
     init_watchtower()
     @router.get("/status")
@@ -128,6 +153,35 @@ def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,
         duplicate=record["status"]!="RECEIVED" or record["updated_at"]!=record["received_at"]
         if not duplicate: _schedule(record["event_id"],public_trace)
         return {"accepted":True,"duplicate":duplicate,"event":record}
+
+    @router.post("/paypal/webhook", status_code=202)
+    async def paypal_webhook(request: Request):
+        try:
+            event = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid webhook JSON.")
+        if not isinstance(event, dict):
+            raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+        headers = {key.lower(): value for key, value in request.headers.items()}
+        try:
+            verified = await asyncio.to_thread(_verify_paypal_signature, headers, event)
+        except Exception:
+            raise HTTPException(status_code=503, detail="PayPal webhook verification is temporarily unavailable.")
+        if not verified:
+            raise HTTPException(status_code=401, detail="PayPal webhook signature could not be verified.")
+        event_type = str(event.get("event_type") or "")
+        if event_type not in {"INVOICING.INVOICE.CREATED", "INVOICING.INVOICE.SENT", "INVOICING.INVOICE.UPDATED"}:
+            return {"accepted": True, "ignored": True, "reason": "Event type is outside the pre-payment invoice monitoring allowlist."}
+        resource = event.get("resource") or {}
+        invoice_id, event_id = resource.get("id"), event.get("id")
+        if not isinstance(invoice_id, str) or not invoice_id.strip() or not isinstance(event_id, str) or not event_id.strip():
+            raise HTTPException(status_code=400, detail="Verified invoice event is missing its event or invoice ID.")
+        record = _create_event(event_id, "VERIFIED_PAYPAL_WEBHOOK", event_type, invoice_id.strip(), "INVOICE")
+        duplicate = record["status"] != "RECEIVED" or record["updated_at"] != record["received_at"]
+        if not duplicate:
+            _schedule(event_id, public_trace)
+        return {"accepted": True, "duplicate": duplicate, "event": record}
+
     @router.post("/demo/simulate-invoice",status_code=202)
     async def simulate(payload:DemoEventRequest):
         if not _DEMO_ENABLED: raise HTTPException(status_code=404,detail="Watchtower demo simulation is disabled.")
