@@ -431,14 +431,24 @@ Return only the supplied response schema.
         )
 
     except Exception as exc:
+        # AI extraction is an enhancement, not a hard dependency. Preserve all
+        # deterministic findings and let the investigation continue even when
+        # Gemini is temporarily unavailable or both configured models fail.
         has_link_evidence = bool(link_evidence["detected_domains"] or link_evidence["malformed_urls"])
         return _result(
             name,
-            "PARTIAL" if has_link_evidence else "FAILED",
+            "PARTIAL",
             EvidenceProvenance.UNAVAILABLE,
-            {"entities": deterministic_entities.model_dump(mode="json"), "extraction_mode": "DETERMINISTIC_LINKS_ONLY"} if has_link_evidence else {},
-            error_code="GEMINI_EXTRACTION_FAILED",
-            error_message=f"{type(exc).__name__}: {str(exc)[:180]}; deterministic link extraction {'was retained' if has_link_evidence else 'found no usable links'}.",
+            {
+                "entities": deterministic_entities.model_dump(mode="json"),
+                "extraction_mode": "DETERMINISTIC_LINKS_ONLY",
+            },
+            error_code="GEMINI_EXTRACTION_UNAVAILABLE",
+            error_message=(
+                f"AI extraction unavailable ({type(exc).__name__}: {str(exc)[:180]}). "
+                + ("Deterministic link findings were retained." if has_link_evidence
+                   else "No link findings were extracted; investigation can continue with supplied details.")
+            ),
         )
 
 def _normalize_domain(value: str) -> str:
