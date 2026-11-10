@@ -438,8 +438,8 @@
           $("watchtowerNote").textContent = `${status.monitoring_claim} PayPal webhook ${status.paypal_webhook_configured ? "is configured" : "is not configured"} at ${status.paypal_webhook_path}.`;
           const alertsHost = $("watchtowerAlerts"); alertsHost.replaceChildren();
           if (eventsResponse.status === 401) {
-            $("watchtowerActionStatus").textContent = "Enter the Watchtower access token to view private event history.";
-            $("watchtowerEvents").textContent = "Event history is protected. Enter the access token above.";
+            $("watchtowerActionStatus").textContent = "Access token rejected. Check that it exactly matches WATCHTOWER_INGEST_TOKEN on the API service.";
+            $("watchtowerEvents").textContent = "Private event history is protected because the supplied token was rejected.";
             alertsHost.textContent = "Alerts will appear here after authenticated event history loads.";
             return;
           }
