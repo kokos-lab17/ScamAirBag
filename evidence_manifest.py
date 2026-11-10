@@ -65,8 +65,7 @@ def _public_evidence(tool_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
         keys = (
             "claimed_seller_name", "claimed_seller_email", "claimed_recipient_name",
             "claimed_amount", "claimed_currency_code", "claimed_amount_quote",
-            "extracted_identifier", "identifier_hint", "detected_urls",
-            "malformed_urls", "detected_domains", "urgency_score",
+            "extracted_identifier", "identifier_hint", "detected_domains", "urgency_score",
             "coercion_tactics", "unusual_payment_instructions",
         )
         return {key: entities[key] for key in keys if key in entities and entities[key] not in (None, [], "")}
