@@ -186,6 +186,25 @@ def test_duplicate_payment_tactic_is_counted_once():
     assert sum(f.risk_impact for f in overlap) == 25
 
 
+def test_paypal_account_limitation_message_gets_content_risk_findings():
+    from scoring import _build_findings
+
+    message = (
+        "[PayPal]: Your account access has been limited. "
+        "Your PayPal account is limited. You have 24 hours to solve the problem "
+        "or your account will be permanently disabled. "
+        "You have to confirm all of your account details on our secured server."
+    )
+    entities = ExtractedEntities()
+    findings, _ = _build_findings(entities, [], message)
+    rule_ids = {finding.rule_id for finding in findings}
+
+    assert "ARTIFICIAL_DEADLINE" in rule_ids
+    assert "ACCOUNT_ACCESS_THREAT" in rule_ids
+    assert "SENSITIVE_INFORMATION_REQUEST" in rule_ids
+    assert sum(finding.risk_impact for finding in findings) >= 40
+
+
 def test_malformed_link_adds_info_finding_not_risk_points():
     from scoring import _build_findings
     entities = ExtractedEntities(malformed_urls=["123hduyen23unfhjc"])
