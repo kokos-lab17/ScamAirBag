@@ -638,8 +638,9 @@ def tool_link_redirect_inspection(url: str) -> ToolExecutionResult:
                     "redirect_limit_reached": False, "inspection_method": "HTTP_HEAD",
                 })
             visited.add(host)
-            port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
-            if parsed.scheme.lower() not in {"http", "https"} or port not in {80, 443}:
+            scheme = parsed.scheme.lower()
+            port = parsed.port or (443 if scheme == "https" else 80)
+            if scheme not in {"http", "https"} or port != (443 if scheme == "https" else 80):
                 hops.append({"host": host, "status": "BLOCKED_UNSUPPORTED_SCHEME_OR_PORT"})
                 blocked = True
                 break
