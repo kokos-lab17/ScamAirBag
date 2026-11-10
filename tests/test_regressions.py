@@ -1195,3 +1195,34 @@ def test_signed_manifest_cannot_be_verified_without_server_key():
     result = verify_evidence_manifest(manifest)
     assert result["valid"] is False
     assert result["signature_status"] == "UNVERIFIABLE"
+
+
+def test_readiness_reports_missing_production_dependencies_without_secrets(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "APP_ENV", "production")
+    for key in ("GEMINI_API_KEY", "PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET",
+                "SCAM_AIRBAG_API_TOKEN", "WATCHTOWER_INGEST_TOKEN", "EVIDENCE_SIGNING_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WATCHTOWER_DB_PATH", str(tmp_path / "watchtower.sqlite3"))
+    response = TestClient(main.app).get("/ready")
+    assert response.status_code == 503
+    assert response.json()["status"] == "degraded"
+    assert response.json()["checks"]["gemini_configured"] is False
+    assert "secret" not in str(response.json()).lower()
+
+
+def test_readiness_reports_configured_service_without_leaking_secret_values(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "APP_ENV", "production")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-secret")
+    monkeypatch.setenv("PAYPAL_CLIENT_ID", "test-paypal-client")
+    monkeypatch.setenv("PAYPAL_CLIENT_SECRET", "test-paypal-secret")
+    monkeypatch.setenv("SCAM_AIRBAG_API_TOKEN", "test-service-token")
+    monkeypatch.setenv("WATCHTOWER_DB_PATH", str(tmp_path / "watchtower.sqlite3"))
+    response = TestClient(main.app).get("/ready")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+    assert "test-gemini-secret" not in response.text
+    assert "test-paypal-secret" not in response.text
