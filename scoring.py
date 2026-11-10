@@ -17,6 +17,7 @@ Important:
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from elastic_intelligence import elastic_is_configured
@@ -141,6 +142,51 @@ def _paypal_seller_email(
                 return email, "PayPal order purchase_units.payee.email_address"
 
     return None, None
+
+
+def _paypal_amounts(tool_results: Sequence[ToolExecutionResult]) -> List[Tuple[str, str, str]]:
+    """Return verified seller-side invoice/order totals as (value, currency, source)."""
+    amounts: List[Tuple[str, str, str]] = []
+    invoice = _result_by_name(tool_results, "paypal_invoice")
+    if invoice and invoice.status == "SUCCESS":
+        amount = invoice.data.get("amount") or {}
+        if isinstance(amount, dict) and amount.get("value") is not None and amount.get("currency_code"):
+            amounts.append((str(amount["value"]), str(amount["currency_code"]).upper(), "PayPal invoice amount"))
+    order = _result_by_name(tool_results, "paypal_order")
+    if order and order.status == "SUCCESS":
+        for index, unit in enumerate(order.data.get("purchase_units") or [], start=1):
+            amount = unit.get("amount") or {}
+            if isinstance(amount, dict) and amount.get("value") is not None and amount.get("currency_code"):
+                amounts.append((str(amount["value"]), str(amount["currency_code"]).upper(), f"PayPal order purchase unit {index}"))
+    return amounts
+
+
+def _compare_claimed_amount(entities: ExtractedEntities, tool_results: Sequence[ToolExecutionResult],
+                            input_text: Optional[str]) -> Tuple[Optional[bool], Optional[str]]:
+    """Compare only an amount whose exact supporting quote appears in the user's text."""
+    claimed = entities.claimed_amount
+    quote = entities.claimed_amount_quote
+    currency = (entities.claimed_currency_code or "").upper().strip()
+    if not claimed:
+        return None, None
+    if not input_text or not quote or quote not in input_text:
+        return None, "The extracted payment amount did not include a verbatim supporting quote found in the submitted message."
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        return None, "The message's currency could not be established unambiguously, so no cross-source amount comparison was made."
+    try:
+        claimed_value = Decimal(claimed.replace(",", "").strip()).quantize(Decimal("0.01"))
+    except (InvalidOperation, AttributeError):
+        return None, "The stated amount could not be normalized safely."
+    verified = [item for item in _paypal_amounts(tool_results) if item[1] == currency]
+    if not verified:
+        return None, f"No verified PayPal invoice/order amount in {currency} was available for comparison."
+    for value, code, source in verified:
+        try:
+            if Decimal(value).quantize(Decimal("0.01")) != claimed_value:
+                return False, f"Message quote: {quote!r}; stated amount: {claimed_value} {currency}; {source}: {value} {code}."
+        except InvalidOperation:
+            continue
+    return True, f"Message quote: {quote!r}; stated amount {claimed_value} {currency} matches the verified PayPal amount(s)."
 
 
 def _paypal_seller_domains(tool_results: Sequence[ToolExecutionResult]) -> List[str]:
@@ -455,6 +501,16 @@ def _build_findings(
             unverified_claims.append(
                 f"Claimed seller email could not be compared with a verified PayPal seller email: {claimed_email}"
             )
+
+        amount_match, amount_evidence = _compare_claimed_amount(entities, tool_results, input_text)
+        if amount_match is False:
+            findings.append(_make_finding(
+                "PAYMENT_AMOUNT_MISMATCH",
+                "The payment amount stated in the message differs from the amount returned by PayPal.",
+                RiskLevel.HIGH, EvidenceProvenance.VERIFIED_PAYPAL, 40, amount_evidence or "",
+            ))
+        elif amount_match is None and entities.claimed_amount:
+            unverified_claims.append(amount_evidence or "The stated amount could not be verified against PayPal.")
 
         # Prefer deterministic checks against the original message for high-impact
         # social-engineering indicators. The model's labels remain useful for
