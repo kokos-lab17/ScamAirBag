@@ -552,6 +552,51 @@ def run_investigation(
               tool_name="email_authentication_headers",
               data={"status": header_result.status, "error_code": header_result.error_code})
 
+    # PayPal IDs supplied directly by a trusted UI field or verified webhook
+    # are deterministic evidence targets. Do this lookup before asking Gemini
+    # to choose tools, so a model outage cannot prevent the core PayPal check.
+    direct_hint = (input_context.identifier_hint or "UNKNOWN").strip().upper()
+    direct_lookup = {
+        "INVOICE": ("paypal_invoice", "invoice_id"),
+        "ORDER": ("paypal_order", "order_id"),
+        "SUBSCRIPTION": ("paypal_subscription", "subscription_id"),
+    }
+    if input_context.identifier and direct_hint in direct_lookup:
+        tool_name, argument_name = direct_lookup[direct_hint]
+        _emit(
+            event_callback,
+            InvestigationEventType.TOOL_STARTED,
+            f"Verifying the supplied PayPal {direct_hint.lower()} directly with PayPal Sandbox.",
+            step_number=len(trace.steps) + 1,
+            tool_name=tool_name,
+        )
+        direct_result = run_tool(tool_name, {argument_name: input_context.identifier})
+        results.append(direct_result)
+        direct_decision = AgentDecision(
+            action="CALL_TOOL",
+            selected_tool=tool_name,
+            rationale=f"Verify the explicitly supplied {direct_hint.lower()} identifier against PayPal Sandbox.",
+            arguments={argument_name: input_context.identifier},
+        )
+        trace.steps.append(InvestigationStep(
+            step_number=len(trace.steps) + 1,
+            decision=direct_decision,
+            result=direct_result,
+        ))
+        _emit(
+            event_callback,
+            InvestigationEventType.TOOL_COMPLETED,
+            f"PayPal {direct_hint.lower()} lookup returned {direct_result.status.lower()}.",
+            step_number=len(trace.steps),
+            tool_name=tool_name,
+            data={
+                "status": direct_result.status,
+                "provenance": direct_result.provenance.value,
+                "error_code": direct_result.error_code,
+                "summary": _safe_event_summary(direct_result),
+            },
+        )
+
     if not api_key:
         scorecard, outcomes = score_investigation(
             input_context, extracted, results
