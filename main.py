@@ -29,6 +29,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import json
 import logging
+import hmac
 from dotenv import load_dotenv
 load_dotenv()
 import os
@@ -48,6 +49,7 @@ logger = logging.getLogger("scamairbag.api")
 
 APP_VERSION = "0.1.0"
 MAX_USER_TEXT_CHARS = int(os.getenv("MAX_USER_TEXT_CHARS", "12000"))
+APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 MAX_IDENTIFIER_CHARS = 200
 ALLOWED_IDENTIFIER_HINTS = {"UNKNOWN", "INVOICE", "ORDER", "SUBSCRIPTION"}
 
@@ -151,15 +153,43 @@ _local_dev_origins = [
     for host in ("localhost", "127.0.0.1")
     for port in (3000, 5173, 5500, 5501)
 ]
-_allowed_origins = list(dict.fromkeys(_allowed_origins + _local_dev_origins))
+if APP_ENV in {"development", "dev", "local"}:
+    _allowed_origins = list(dict.fromkeys(_allowed_origins + _local_dev_origins))
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type", "Authorization", "X-Watchtower-Token"],
 )
+
+
+@app.middleware("http")
+async def require_service_token_for_investigations(request: Request, call_next):
+    """Require a shared operator token for costly/private investigation endpoints in production."""
+    protected = {
+        "/api/v1/investigate",
+        "/api/v1/investigate/stream",
+        "/api/v1/evidence/verify",
+    }
+    if APP_ENV in {"production", "prod"} and request.url.path in protected:
+        expected = os.getenv("SCAM_AIRBAG_API_TOKEN") or os.getenv("WATCHTOWER_INGEST_TOKEN")
+        if not expected:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "The production API access token has not been configured."},
+            )
+        supplied = request.headers.get("x-watchtower-token", "")
+        authorization = request.headers.get("authorization", "")
+        if not supplied and authorization.lower().startswith("bearer "):
+            supplied = authorization[7:].strip()
+        if not supplied or not hmac.compare_digest(expected, supplied):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "A valid ScamAirbag service access token is required."},
+            )
+    return await call_next(request)
 
 
 def _dump_model(value: Any) -> Dict[str, Any]:
