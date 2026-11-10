@@ -11,6 +11,10 @@ services:
       mountPath: /var/data
       sizeGB: 1
     envVars:
+      - key: APP_ENV
+        value: production
+      - key: SCAM_AIRBAG_API_TOKEN
+        sync: false
       - key: PYTHON_VERSION
         value: 3.12.8
       - key: CORS_ORIGINS
