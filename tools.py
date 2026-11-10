@@ -580,7 +580,7 @@ def _head_request_pinned(url: str, domain: str, ip: str) -> Dict[str, Any]:
     parsed = urlsplit(url)
     scheme = parsed.scheme.lower()
     port = parsed.port or (443 if scheme == "https" else 80)
-    if scheme not in {"http", "https"} or port not in {80, 443}:
+    if scheme not in {"http", "https"} or port != (443 if scheme == "https" else 80):
         raise ValueError("Only standard HTTP and HTTPS ports are inspected.")
     path = parsed.path or "/"
     if parsed.query:
@@ -627,6 +627,7 @@ def tool_link_redirect_inspection(url: str) -> ToolExecutionResult:
         hops = []
         visited = set()
         blocked = False
+        limit_reached = False
         for index in range(6):
             parsed = urlsplit(current)
             host = (parsed.hostname or "").encode("idna").decode("ascii").lower().rstrip(".")
@@ -657,7 +658,7 @@ def tool_link_redirect_inspection(url: str) -> ToolExecutionResult:
             from urllib.parse import urljoin
             current = urljoin(current, location)
         else:
-            blocked = True
+            limit_reached = True
         final_parsed = urlsplit(current)
         final_host = (final_parsed.hostname or final_host).lower()
         return _result(name, "SUCCESS", EvidenceProvenance.OBSERVED_EXTERNAL, {
@@ -665,7 +666,7 @@ def tool_link_redirect_inspection(url: str) -> ToolExecutionResult:
             "redirect_hops": hops,
             "cross_domain_redirect": final_host != initial_host,
             "https_downgrade": parsed.scheme.lower() == "https" and final_parsed.scheme.lower() == "http",
-            "redirect_limit_reached": len(hops) >= 6 and not blocked,
+            "redirect_limit_reached": limit_reached,
             "blocked_unsafe_destination": blocked,
             "inspection_method": "HTTP_HEAD",
         })
