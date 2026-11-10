@@ -566,3 +566,36 @@ def test_watchtower_event_creation_is_idempotent(tmp_path, monkeypatch):
     assert duplicate_first is False
     assert duplicate_second is True
     assert first["event_id"] == second["event_id"]
+
+
+def test_watchtower_startup_recovers_interrupted_jobs(tmp_path, monkeypatch):
+    import asyncio
+    import watchtower
+    from schemas import InvestigationTrace, AirbagScorecard, RecommendedAction
+
+    monkeypatch.setattr(watchtower, "_DB_PATH", str(tmp_path / "watchtower.sqlite3"))
+    watchtower.init_watchtower()
+    record, duplicate = watchtower._create_event("restart-event", "TEST", "INVOICE.CREATED", "INV-2", "INVOICE")
+    assert duplicate is False
+    with watchtower._db() as db:
+        db.execute("UPDATE watchtower_events SET status='INVESTIGATING' WHERE event_id='restart-event'")
+    monkeypatch.setattr(watchtower, "run_investigation", lambda payload: InvestigationTrace(
+        input_context=payload, status="COMPLETED",
+        final_scorecard=AirbagScorecard(
+            risk_score=5, coverage_score=100, confidence_level="HIGH",
+            recommended_action=RecommendedAction.PROCEED_WITH_MANUAL_VERIFICATION,
+            executive_summary="Test", findings=[]
+        )
+    ))
+
+    async def scenario():
+        await watchtower.resume_watchtower_jobs(lambda trace: {"status": trace.status})
+        for _ in range(30):
+            await asyncio.sleep(0.02)
+            with watchtower._db() as db:
+                row = db.execute("SELECT status FROM watchtower_events WHERE event_id='restart-event'").fetchone()
+            if row["status"] == "COMPLETED":
+                break
+        assert row["status"] == "COMPLETED"
+
+    asyncio.run(scenario())
