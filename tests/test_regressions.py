@@ -541,20 +541,20 @@ def test_watchtower_paypal_signature_verification_uses_paypal_verify_api(monkeyp
         captured.update(kwargs)
         return Response()
     monkeypatch.setattr(watchtower.requests, "post", fake_post)
-
+    raw = b'{"id":"WH-EVENT-1","event_type":"INVOICING.INVOICE.SENT","resource":{"id":"INV-1"}}'
     verified = watchtower._verify_paypal_signature({
         "paypal-transmission-id": "tx-1",
         "paypal-transmission-time": "2026-11-10T10:00:00Z",
         "paypal-cert-url": "https://api.paypal.com/cert",
         "paypal-auth-algo": "SHA256withRSA",
         "paypal-transmission-sig": "signature",
-    }, {"id": "WH-EVENT-1", "event_type": "INVOICING.INVOICE.SENT", "resource": {"id": "INV-1"}})
+    }, {"id": "WH-EVENT-1", "event_type": "INVOICING.INVOICE.SENT", "resource": {"id": "INV-1"}}, raw)
 
     assert verified is True
     assert captured["url"].endswith("/v1/notifications/verify-webhook-signature")
     assert captured["headers"]["Authorization"] == "Bearer oauth-token"
-    assert captured["json"]["webhook_id"] == "WH-TEST"
-    assert captured["json"]["webhook_event"]["id"] == "WH-EVENT-1"
+    assert captured["data"].endswith(b',"webhook_event":' + raw + b'}')
+    assert b'"webhook_id":"WH-TEST"' in captured["data"]
 
 
 def test_watchtower_event_creation_is_idempotent(tmp_path, monkeypatch):
