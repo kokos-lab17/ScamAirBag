@@ -55,7 +55,7 @@ class InvestigationRequest(BaseModel):
         max_length=MAX_USER_TEXT_CHARS,
         description="Message, email, or payment request to investigate.",
     )
-    email_headers: Optional[str] = Field(default=None, max_length=12000, description="Optional raw email headers; do not include message body or unrelated personal data."),
+    email_headers: Optional[str] = Field(default=None, max_length=12000, description="Optional raw email headers; do not include message body or unrelated personal data.")
     identifier: Optional[str] = Field(
         default=None,
         max_length=MAX_IDENTIFIER_CHARS,
