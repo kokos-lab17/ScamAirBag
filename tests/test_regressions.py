@@ -745,3 +745,17 @@ def test_watchtower_registers_paypal_webhook_and_persists_id(tmp_path, monkeypat
     assert captured["json"]["url"] == "https://scamairbag.example/api/v1/watchtower/paypal/webhook"
     assert "CHECKOUT.ORDER.APPROVED" in [item["name"] for item in captured["json"]["event_types"]]
     assert watchtower._get_setting("PAYPAL_WEBHOOK_ID") == "WH-REGISTERED"
+
+
+def test_raw_email_headers_are_not_included_in_model_context():
+    from agent import _model_input_context
+
+    request = InvestigationInput(
+        user_text="Please check this payment request.",
+        email_headers="From: private-sender@example.com\\nAuthentication-Results: private-auth-value",
+    )
+    model_context = _model_input_context(request)
+    assert model_context["user_text"] == "Please check this payment request."
+    assert "private-sender@example.com" not in str(model_context)
+    assert "private-auth-value" not in str(model_context)
+    assert "PARSED LOCALLY" in model_context["email_headers"]
