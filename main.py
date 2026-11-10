@@ -28,6 +28,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dotenv import load_dotenv
+load_dotenv()
 import os
 from typing import Any, Dict, Optional
 
