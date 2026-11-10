@@ -1226,3 +1226,23 @@ def test_readiness_reports_configured_service_without_leaking_secret_values(monk
     assert response.json()["status"] == "ready"
     assert "test-gemini-secret" not in response.text
     assert "test-paypal-secret" not in response.text
+
+
+def test_agent_rejects_duplicate_evidence_requests_but_allows_new_targets():
+    first = InvestigationStep(
+        step_number=1,
+        decision=AgentDecision(
+            action="CALL_TOOL", selected_tool="domain_intelligence",
+            rationale="Check the submitted domain", arguments={"domain_or_url": "https://example.com/path"},
+        ),
+        result=ToolExecutionResult(
+            tool_name="domain_intelligence", status="FAILED",
+            provenance=EvidenceProvenance.UNAVAILABLE,
+        ),
+    )
+    assert agent._tool_call_already_attempted(
+        "domain_intelligence", {"domain_or_url": "example.com"}, [first]
+    )
+    assert not agent._tool_call_already_attempted(
+        "domain_intelligence", {"domain_or_url": "different.example"}, [first]
+    )
