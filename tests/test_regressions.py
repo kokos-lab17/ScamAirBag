@@ -1246,3 +1246,19 @@ def test_agent_rejects_duplicate_evidence_requests_but_allows_new_targets():
     assert not agent._tool_call_already_attempted(
         "domain_intelligence", {"domain_or_url": "different.example"}, [first]
     )
+
+
+def test_agent_stops_cleanly_when_client_disconnects_before_work_starts(monkeypatch):
+    import threading
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    cancel = threading.Event()
+    cancel.set()
+    trace = agent.run_investigation(
+        InvestigationInput(user_text="Please inspect this request"),
+        cancel_event=cancel,
+    )
+    assert trace.status == "PARTIAL"
+    assert trace.error_code == "CLIENT_DISCONNECTED"
+    assert trace.steps == []
+    assert trace.final_scorecard is not None
