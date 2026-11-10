@@ -233,6 +233,25 @@ def test_redirect_inspection_blocks_private_destination(monkeypatch):
     assert result.data["redirect_hops"][-1]["status"] == "BLOCKED_NON_PUBLIC_DNS"
 
 
+def test_redirect_inspection_is_counted_in_evidence_coverage():
+    url = "https://short.example/claim"
+    entities = ExtractedEntities(detected_urls=[url])
+    pending = build_source_outcomes(InvestigationInput(user_text="Check this link"), entities, [])
+    pending_redirect = next(x for x in pending if x.source_name.startswith("link_redirect:"))
+    assert pending_redirect.status == "SKIPPED"
+
+    completed = ToolExecutionResult(
+        tool_name="link_redirect_inspection",
+        status="SUCCESS",
+        provenance=EvidenceProvenance.OBSERVED_EXTERNAL,
+        data={"initial_url": url, "initial_host": "short.example", "final_host": "destination.example"},
+    )
+    outcomes = build_source_outcomes(InvestigationInput(user_text="Check this link"), entities, [completed])
+    checked_redirect = next(x for x in outcomes if x.source_name.startswith("link_redirect:"))
+    assert checked_redirect.status == "SUCCESS"
+    assert calculate_coverage(outcomes) > calculate_coverage(pending)
+
+
 def test_link_extraction_detects_malformed_paypal_link():
     result = tools._extract_link_evidence("PayPal link:123hduyen23unfhjc")
     assert result["detected_urls"] == []
