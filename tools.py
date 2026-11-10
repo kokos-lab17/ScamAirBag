@@ -13,6 +13,7 @@ Environment:
 """
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import os
@@ -573,6 +574,109 @@ def _tls_certificate_observation(domain: str, resolved_ips: List[str]) -> Dict[s
         "tls_checked": True, "tls_error": last_error, "tls_hostname_verified": False,
     }
 
+
+def _head_request_pinned(url: str, domain: str, ip: str) -> Dict[str, Any]:
+    """Send HEAD to a previously validated public IP; do not follow redirects."""
+    parsed = urlsplit(url)
+    scheme = parsed.scheme.lower()
+    port = parsed.port or (443 if scheme == "https" else 80)
+    if scheme not in {"http", "https"} or port not in {80, 443}:
+        raise ValueError("Only standard HTTP and HTTPS ports are inspected.")
+    path = parsed.path or "/"
+    if parsed.query:
+        path += "?" + parsed.query
+    path = path[:2048]
+    raw = socket.create_connection((ip, port), timeout=4)
+    sock = raw
+    try:
+        if scheme == "https":
+            sock = ssl.create_default_context().wrap_socket(raw, server_hostname=domain)
+        request = (
+            "HEAD " + path + " HTTP/1.1\\r\\n"
+            + "Host: " + domain + "\\r\\n"
+            + "User-Agent: ScamAirbag-LinkInspector/1.0\\r\\n"
+            + "Accept: */*\\r\\n"
+            + "Connection: close\\r\\n\\r\\n"
+        ).encode("ascii", errors="strict")
+        sock.sendall(request)
+        response = http.client.HTTPResponse(sock)
+        response.begin()
+        location = response.getheader("Location")
+        return {"status_code": response.status, "location": location[:2048] if location else None}
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
+def tool_link_redirect_inspection(url: str) -> ToolExecutionResult:
+    """Inspect up to five HEAD redirects; block non-public destinations."""
+    name = "link_redirect_inspection"
+    try:
+        current = url.strip()
+        parsed = urlsplit(current)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("A complete HTTP or HTTPS URL is required.")
+        if parsed.username or parsed.password:
+            raise ValueError("URLs containing embedded credentials are not inspected.")
+        initial_host = parsed.hostname.encode("idna").decode("ascii").lower().rstrip(".")
+        final_host = initial_host
+        hops = []
+        visited = set()
+        blocked = False
+        for index in range(6):
+            parsed = urlsplit(current)
+            host = (parsed.hostname or "").encode("idna").decode("ascii").lower().rstrip(".")
+            if not host or host in visited:
+                return _result(name, "SUCCESS", EvidenceProvenance.OBSERVED_EXTERNAL, {
+                    "initial_host": initial_host, "final_host": host or final_host,
+                    "redirect_hops": hops, "redirect_loop_detected": bool(host),
+                    "redirect_limit_reached": False, "inspection_method": "HTTP_HEAD",
+                })
+            visited.add(host)
+            port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+            if parsed.scheme.lower() not in {"http", "https"} or port not in {80, 443}:
+                hops.append({"host": host, "status": "BLOCKED_UNSUPPORTED_SCHEME_OR_PORT"})
+                blocked = True
+                break
+            ips = _resolve_domain(host)
+            if not ips or any(not ipaddress.ip_address(ip).is_global for ip in ips):
+                hops.append({"host": host, "status": "BLOCKED_NON_PUBLIC_DNS"})
+                blocked = True
+                break
+            observation = _head_request_pinned(current, host, ips[0])
+            status = observation["status_code"]
+            location = observation["location"]
+            hops.append({"host": host, "status_code": status, "has_location": bool(location)})
+            final_host = host
+            if status not in {301, 302, 303, 307, 308} or not location:
+                break
+            from urllib.parse import urljoin
+            current = urljoin(current, location)
+        else:
+            blocked = True
+        final_parsed = urlsplit(current)
+        final_host = (final_parsed.hostname or final_host).lower()
+        return _result(name, "SUCCESS", EvidenceProvenance.OBSERVED_EXTERNAL, {
+            "initial_host": initial_host, "final_host": final_host,
+            "redirect_hops": hops,
+            "cross_domain_redirect": final_host != initial_host,
+            "https_downgrade": parsed.scheme.lower() == "https" and final_parsed.scheme.lower() == "http",
+            "redirect_limit_reached": len(hops) >= 6 and not blocked,
+            "blocked_unsafe_destination": blocked,
+            "inspection_method": "HTTP_HEAD",
+        })
+    except subprocess.TimeoutExpired:
+        return _result(name, "FAILED", EvidenceProvenance.UNAVAILABLE,
+                       error_code="REDIRECT_DNS_TIMEOUT", error_message="DNS lookup timed out.")
+    except (OSError, ssl.SSLError, http.client.HTTPException, ValueError) as exc:
+        return _result(name, "FAILED", EvidenceProvenance.UNAVAILABLE,
+                       error_code="REDIRECT_INSPECTION_FAILED",
+                       error_message=type(exc).__name__)
+
+
+
 def tool_domain_intelligence(domain_or_url: str) -> ToolExecutionResult:
     """Observe DNS, WHOIS, and TLS certificate metadata; never fetch page content."""
     name = "domain_intelligence"
@@ -658,6 +762,7 @@ TOOL_REGISTRY = {
     "paypal_order": tool_paypal_order,
     "paypal_subscription": tool_paypal_subscription,
     "domain_intelligence": tool_domain_intelligence,
+    "link_redirect_inspection": tool_link_redirect_inspection,
     "historical_pattern_search": search_similar_cases,
     "threat_intelligence": check_domain_reputation,
     "extract_message_context": tool_extract_message_context,
@@ -678,6 +783,8 @@ def run_tool(tool_name: str, arguments: Dict[str, Any]) -> ToolExecutionResult:
             return function(order_id=str(arguments["order_id"]))
         if tool_name == "paypal_subscription":
             return function(subscription_id=str(arguments["subscription_id"]))
+        if tool_name == "link_redirect_inspection":
+            return function(url=str(arguments["url"]))
         if tool_name in {"domain_intelligence", "historical_pattern_search", "threat_intelligence"}:
             if tool_name == "domain_intelligence":
                 return function(domain_or_url=str(arguments["domain_or_url"]))
