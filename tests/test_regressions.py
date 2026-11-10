@@ -477,6 +477,7 @@ def test_watchtower_demo_event_schedules_investigation_and_persists(tmp_path, mo
 
     monkeypatch.setattr(watchtower, "_DB_PATH", str(tmp_path / "watchtower.sqlite3"))
     monkeypatch.setattr(watchtower, "_DEMO_ENABLED", True)
+    monkeypatch.setattr(watchtower, "_INGEST_TOKEN", "test-watchtower-token")
     monkeypatch.setattr(watchtower, "run_investigation", lambda payload: InvestigationTrace(
         input_context=payload, status="COMPLETED",
         final_scorecard=AirbagScorecard(
@@ -493,7 +494,7 @@ def test_watchtower_demo_event_schedules_investigation_and_persists(tmp_path, mo
                     if getattr(route, "path", "") == "/api/v1/watchtower/demo/simulate-invoice")
 
     async def scenario():
-        response = await endpoint(watchtower.DemoEventRequest(identifier="INV-DEMO"))
+        response = await endpoint(watchtower.DemoEventRequest(identifier="INV-DEMO"), x_watchtower_token="test-watchtower-token")
         assert response["accepted"] is True
         event_id = response["event"]["event_id"]
         for _ in range(30):
