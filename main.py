@@ -42,6 +42,7 @@ from pydantic import BaseModel, Field, model_validator
 from agent import run_investigation
 from schemas import InvestigationInput, InvestigationTrace
 from watchtower import build_watchtower_router, resume_watchtower_jobs
+from evidence_manifest import build_evidence_manifest, verify_evidence_manifest
 
 logger = logging.getLogger("scamairbag.api")
 
@@ -49,6 +50,10 @@ APP_VERSION = "0.1.0"
 MAX_USER_TEXT_CHARS = int(os.getenv("MAX_USER_TEXT_CHARS", "12000"))
 MAX_IDENTIFIER_CHARS = 200
 ALLOWED_IDENTIFIER_HINTS = {"UNKNOWN", "INVOICE", "ORDER", "SUBSCRIPTION"}
+
+
+class EvidenceManifestVerificationRequest(BaseModel):
+    manifest: Dict[str, Any]
 
 
 class InvestigationRequest(BaseModel):
@@ -225,6 +230,7 @@ def _public_trace(trace: InvestigationTrace) -> Dict[str, Any]:
             if trace.final_scorecard and hasattr(trace.final_scorecard, "model_dump")
             else trace.final_scorecard.dict() if trace.final_scorecard else None
         ),
+        "evidence_manifest": build_evidence_manifest(trace),
     }
 
 
@@ -236,6 +242,12 @@ def _sse(event_name: str, payload: Dict[str, Any]) -> str:
     serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     # Each JSON object is one line, but escape defensively for SSE framing.
     return f"event: {event_name}\ndata: {serialized}\n\n"
+
+
+@app.post("/api/v1/evidence/verify")
+async def verify_evidence(payload: EvidenceManifestVerificationRequest) -> Dict[str, Any]:
+    """Verify hashes in a previously exported evidence manifest."""
+    return verify_evidence_manifest(payload.manifest)
 
 
 @app.get("/health")
