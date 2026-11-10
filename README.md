@@ -143,10 +143,10 @@ Required/optional environment variables:
 PAYPAL_WEBHOOK_ID=your_sandbox_webhook_id
 WATCHTOWER_DEMO_ENABLED=true
 WATCHTOWER_INGEST_TOKEN=use-a-long-random-secret-for-your-own-integration
-WATCHTOWER_DB_PATH=/var/data/watchtower.sqlite3
+WATCHTOWER_DB_PATH=/var/data/watchtower.sqlite3\nWATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE=false
 ```
 
-`WATCHTOWER_DB_PATH` must point to a mounted persistent disk path if event history must survive Render instance replacement/restarts. Without persistent storage, SQLite is only local/ephemeral history. The current background task runner is single-process and in-process: it is appropriate for a controlled hackathon prototype, not yet a production durable queue. PayPal's Developer Dashboard webhook simulator does not support postback signature verification; use a real Sandbox app event for the verified-webhook path, or the clearly labelled Watchtower demo simulator to demonstrate automatic agent wake-up. A process restart can interrupt an active investigation; the next engineering phase is a durable worker/queue and deployment-aware recovery.
+`WATCHTOWER_DB_PATH` must point to a mounted persistent disk path if event history must survive Render instance replacement/restarts. Without persistent storage, SQLite is only local/ephemeral history. Autonomous case storage is off by default. Set `WATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE=true` only after explicitly opting in; actual storage also requires `ELASTIC_STORE_CASES=true`. Historical lookups can use configured Elastic records, but matches remain contextual and never prove fraud.\n\nThe current background task runner is single-process and in-process: it is appropriate for a controlled hackathon prototype, not yet a production durable queue. PayPal's Developer Dashboard webhook simulator does not support postback signature verification; use a real Sandbox app event for the verified-webhook path, or the clearly labelled Watchtower demo simulator to demonstrate automatic agent wake-up. A process restart can interrupt an active investigation; the next engineering phase is a durable worker/queue and deployment-aware recovery.
 
 ### Watchtower API
 
