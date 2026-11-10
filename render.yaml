@@ -19,6 +19,8 @@ services:
         value: 3.12.8
       - key: MAX_CONCURRENT_INVESTIGATIONS
         value: "3"
+      - key: INVESTIGATION_RATE_LIMIT_PER_MINUTE
+        value: "20"
       - key: MAX_INVESTIGATION_SECONDS
         value: "180"
       - key: CORS_ORIGINS
