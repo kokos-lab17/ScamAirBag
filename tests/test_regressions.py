@@ -1080,3 +1080,20 @@ def test_public_trace_exposes_minimized_paypal_plan_evidence_not_private_payer_e
     public = main._public_trace(trace)
     assert public["paypal_evidence"][0]["evidence"]["plan_name"] == "Monthly service"
     assert "private-payer@example.com" not in str(public)
+
+
+def test_subscription_plan_pricing_is_a_separate_applicable_coverage_check():
+    subscription = ToolExecutionResult(
+        tool_name="paypal_subscription", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"subscription_id": "I-SUB-123", "status": "ACTIVE",
+              "plan_details_status": "UNAVAILABLE", "plan_error_code": "PAYPAL_HTTP_403"},
+    )
+    outcomes = build_source_outcomes(
+        InvestigationInput(identifier="I-SUB-123", identifier_hint="SUBSCRIPTION"),
+        None, [subscription],
+    )
+    plan = next(item for item in outcomes if item.source_name == "paypal_subscription_plan")
+    assert plan.applicable is True
+    assert plan.status == "FAILED"
+    assert plan.error_code == "PAYPAL_HTTP_403"
