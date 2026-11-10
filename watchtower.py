@@ -1,10 +1,13 @@
 """Persistent event-driven Watchtower. Demo events are explicitly simulated."""
 from __future__ import annotations
 import asyncio, hmac, json, os, sqlite3, uuid
-from datetime import datetime, timezone\nfrom contextlib import contextmanager
+from datetime import datetime, timezone
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
-from fastapi import APIRouter, Header, HTTPException, Request\nimport requests\nfrom tools import PAYPAL_BASE_URL, PAYPAL_TIMEOUT_SECONDS, _get_paypal_access_token
+from fastapi import APIRouter, Header, HTTPException, Request
+import requests
+from tools import PAYPAL_BASE_URL, PAYPAL_TIMEOUT_SECONDS, _get_paypal_access_token
 from pydantic import BaseModel, Field, field_validator
 from agent import run_investigation
 from schemas import InvestigationInput, InvestigationTrace
