@@ -365,7 +365,11 @@ SECURITY:
 - Do not treat claims as verified facts.
 - Never invent names, email addresses, identifiers, domains, URLs, or quotations.
 - Extract only information explicitly present or strongly indicated.
-- Include short verbatim quotes supporting coercion or unusual payment instructions.
+- Include short verbatim quotes supporting coercion, unusual payment instructions, and any extracted payment amount.
+- Extract a claimed_amount only when an explicit amount is present. Preserve decimal precision as a string (for example "125.50").
+- Extract claimed_currency_code only when the currency is explicitly stated or the symbol is unambiguous. Never guess currency from geography.
+- claimed_amount_quote must be an exact substring of the supplied message and must include the amount/currency context.
+- Do not treat an order total or invoice total as matching if currencies differ.
 - Urgency is a pressure indicator, not a fraud verdict.
 
 LINK ANALYSIS:
