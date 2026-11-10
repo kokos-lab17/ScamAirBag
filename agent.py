@@ -336,7 +336,9 @@ def _tool_evidence_for_model(result: ToolExecutionResult) -> Dict[str, Any]:
         }
     elif result.tool_name == "paypal_subscription":
         safe = {key: data.get(key) for key in (
-            "subscription_id", "status", "plan_id", "start_time", "next_billing_time"
+            "subscription_id", "status", "plan_id", "plan_name", "plan_status",
+            "billing_cycles", "start_time", "next_billing_time",
+            "failed_payments_count", "outstanding_balance", "last_payment"
         )}
     elif result.tool_name == "domain_intelligence":
         safe = {key: data.get(key) for key in (
@@ -400,7 +402,10 @@ def _safe_event_summary(result: ToolExecutionResult) -> Dict[str, Any]:
     elif result.tool_name == "paypal_order":
         summary = {key: data.get(key) for key in ("order_id", "status", "intent")}
     elif result.tool_name == "paypal_subscription":
-        summary = {key: data.get(key) for key in ("subscription_id", "status", "plan_id", "next_billing_time")}
+        summary = {key: data.get(key) for key in (
+            "subscription_id", "status", "plan_id", "plan_name", "plan_status",
+            "billing_cycles", "next_billing_time", "failed_payments_count"
+        )}
     elif result.tool_name == "link_redirect_inspection":
         summary = {key: data.get(key) for key in (
             "initial_host", "final_host", "cross_domain_redirect", "https_downgrade",
