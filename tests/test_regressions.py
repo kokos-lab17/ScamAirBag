@@ -1000,3 +1000,34 @@ def test_direct_verified_paypal_lookup_is_preserved_when_gemini_is_unavailable(m
     assert trace.final_scorecard is not None
     assert any(item.source_name == "paypal_invoice" and item.status == "SUCCESS"
                for item in trace.source_outcomes)
+
+
+def test_production_investigation_rate_limit_is_enforced(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "APP_ENV", "production")
+    monkeypatch.setattr(main, "INVESTIGATION_RATE_LIMIT_PER_MINUTE", 1)
+    main._rate_windows.clear()
+    monkeypatch.setenv("WATCHTOWER_INGEST_TOKEN", "rate-test-token")
+    monkeypatch.delenv("SCAM_AIRBAG_API_TOKEN", raising=False)
+    client = TestClient(main.app)
+    headers = {"X-Watchtower-Token": "rate-test-token"}
+    first = client.post("/api/v1/investigate", json={"user_text": "first"}, headers=headers)
+    second = client.post("/api/v1/investigate", json={"user_text": "second"}, headers=headers)
+    assert first.status_code != 401
+    assert second.status_code == 429
+    assert second.headers["Retry-After"]
+
+
+def test_production_investigation_rejects_oversized_body(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "APP_ENV", "production")
+    monkeypatch.setenv("WATCHTOWER_INGEST_TOKEN", "size-test-token")
+    monkeypatch.delenv("SCAM_AIRBAG_API_TOKEN", raising=False)
+    response = TestClient(main.app).post(
+        "/api/v1/investigate",
+        content='{"user_text":"' + ("x" * 41000) + '"}',
+        headers={"Content-Type": "application/json", "X-Watchtower-Token": "size-test-token"},
+    )
+    assert response.status_code == 413
