@@ -13,7 +13,7 @@ Install:
 
 Environment:
     GEMINI_API_KEY
-    GEMINI_MODEL (default: gemini-3.8-flash)
+    GEMINI_MODEL (default: gemini-3.1-flash-lite)
     GEMINI_FALLBACK_MODEL (default: gemini-3.5-flash)
 
 Public entry point:
@@ -50,7 +50,7 @@ from threat_intelligence import virustotal_is_configured
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash")
 MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "12"))
 MAX_MODEL_TURNS = int(os.getenv("MAX_MODEL_TURNS", "24"))
@@ -761,8 +761,15 @@ def run_investigation(
         else:
             feedback = "Maximum model turns reached before a finish decision."
 
-    except Exception as exc:
-        logger.exception("Agent runtime failure")
+    except Exception:
+        import traceback
+
+        print(
+            f"\n[ScamAirbag] AGENT_RUNTIME_ERROR | model={GEMINI_MODEL}",
+            flush=True,
+        )
+        traceback.print_exc()
+
         trace.status = "FAILED"
         trace.error_code = "AGENT_RUNTIME_ERROR"
         _emit(

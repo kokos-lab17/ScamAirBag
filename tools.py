@@ -9,7 +9,7 @@ Optional WHOIS:
 Environment:
     PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET
     PAYPAL_BASE_URL (default: https://api-m.sandbox.paypal.com)
-    GEMINI_API_KEY, GEMINI_MODEL (default: gemini-2.5-flash)
+    GEMINI_API_KEY, GEMINI_MODEL (default: gemini-3.1-flash-lite)
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ PAYPAL_BASE_URL = os.getenv("PAYPAL_BASE_URL", "https://api-m.sandbox.paypal.com
 PAYPAL_TIMEOUT_SECONDS = float(os.getenv("PAYPAL_TIMEOUT_SECONDS", "12"))
 DNS_TIMEOUT_SECONDS = float(os.getenv("DNS_TIMEOUT_SECONDS", "4"))
 WHOIS_TIMEOUT_SECONDS = float(os.getenv("WHOIS_TIMEOUT_SECONDS", "7"))
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash")
 
 _token_lock = threading.Lock()
