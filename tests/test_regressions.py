@@ -218,3 +218,21 @@ def test_gemini_extraction_falls_back_after_transient_primary_error(monkeypatch)
     )
     assert result == {"ok": True}
     assert calls == ["primary-test", "fallback-test"]
+
+
+def test_public_trace_does_not_expose_model_rationale():
+    trace = InvestigationTrace(
+        input_context=InvestigationInput(user_text="Check this request"),
+        steps=[InvestigationStep(
+            step_number=1,
+            decision=AgentDecision(
+                action="CALL_TOOL",
+                selected_tool="domain_intelligence",
+                rationale="Private model text that must not be exposed",
+                arguments={"domain_or_url": "example.com"},
+            ),
+        )],
+    )
+    public = main._public_trace(trace)
+    assert "rationale" not in public["steps"][0]
+    assert "Private model text" not in str(public)
