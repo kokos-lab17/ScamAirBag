@@ -30,6 +30,8 @@ from contextlib import asynccontextmanager
 import json
 import logging
 import hmac
+import time
+from collections import deque
 from dotenv import load_dotenv
 load_dotenv()
 import os
@@ -52,6 +54,9 @@ MAX_USER_TEXT_CHARS = int(os.getenv("MAX_USER_TEXT_CHARS", "12000"))
 APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 MAX_IDENTIFIER_CHARS = 200
 MAX_CONCURRENT_INVESTIGATIONS = max(1, min(8, int(os.getenv("MAX_CONCURRENT_INVESTIGATIONS", "3"))))
+INVESTIGATION_RATE_LIMIT_PER_MINUTE = max(1, int(os.getenv("INVESTIGATION_RATE_LIMIT_PER_MINUTE", "20")))
+MAX_API_BODY_BYTES = 40000
+_rate_windows: Dict[str, deque] = {}
 _investigation_semaphore = asyncio.Semaphore(MAX_CONCURRENT_INVESTIGATIONS)
 ALLOWED_IDENTIFIER_HINTS = {"UNKNOWN", "INVOICE", "ORDER", "SUBSCRIPTION"}
 
@@ -193,6 +198,31 @@ async def require_service_token_for_investigations(request: Request, call_next):
                 status_code=401,
                 content={"detail": "A valid ScamAirbag service access token is required."},
             )
+        try:
+            body_length = int(request.headers.get("content-length", "0"))
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."})
+        if body_length > MAX_API_BODY_BYTES:
+            return JSONResponse(status_code=413, content={"detail": "Request body exceeds the API size limit."})
+        # Single-instance, per-IP sliding window. Use an external shared limiter
+        # before scaling this API horizontally.
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.monotonic()
+        window = _rate_windows.setdefault(client_ip, deque())
+        while window and now - window[0] >= 60:
+            window.popleft()
+        if len(window) >= INVESTIGATION_RATE_LIMIT_PER_MINUTE:
+            retry_after = max(1, int(60 - (now - window[0])))
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Investigation rate limit reached. Try again shortly."},
+                headers={"Retry-After": str(retry_after)},
+            )
+        window.append(now)
+        if len(_rate_windows) > 5000:
+            stale = [key for key, entries in _rate_windows.items() if not entries or now - entries[-1] >= 60]
+            for key in stale:
+                _rate_windows.pop(key, None)
     return await call_next(request)
 
 
