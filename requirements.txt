@@ -5,3 +5,4 @@ requests>=2.32,<3
 google-genai>=1.0,<2
 render>=1.7.0,<2
 python-whois>=0.9,<1
+python-dotenv>=1.0,<2
