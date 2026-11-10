@@ -259,9 +259,18 @@ def _public_domain_evidence(trace: InvestigationTrace) -> list[Dict[str, Any]]:
         })
     return evidence
 
+def _evidence_signing_key() -> Optional[str]:
+    """Prefer a dedicated signing secret; fall back to the configured service token."""
+    return (
+        os.getenv("EVIDENCE_SIGNING_KEY")
+        or os.getenv("SCAM_AIRBAG_API_TOKEN")
+        or os.getenv("WATCHTOWER_INGEST_TOKEN")
+    )
+
+
 def _public_trace(trace: InvestigationTrace) -> Dict[str, Any]:
     """Return an audit summary without echoing raw messages or raw tool payloads."""
-    evidence_manifest = build_evidence_manifest(trace)
+    evidence_manifest = build_evidence_manifest(trace, signing_key=_evidence_signing_key())
     paypal_evidence = [
         item for item in evidence_manifest["evidence_records"]
         if item["tool_name"] in {"paypal_invoice", "paypal_order", "paypal_subscription"}
@@ -317,7 +326,7 @@ def _sse(event_name: str, payload: Dict[str, Any]) -> str:
 @app.post("/api/v1/evidence/verify")
 async def verify_evidence(payload: EvidenceManifestVerificationRequest) -> Dict[str, Any]:
     """Verify hashes in a previously exported evidence manifest."""
-    return verify_evidence_manifest(payload.manifest)
+    return verify_evidence_manifest(payload.manifest, signing_key=_evidence_signing_key())
 
 
 @app.get("/health")
