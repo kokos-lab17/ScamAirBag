@@ -123,7 +123,7 @@ def _schedule(event_id,public_trace):
     task=asyncio.create_task(_investigate_event(event_id,public_trace)); _TASKS.add(task); task.add_done_callback(_TASKS.discard)
 
 
-def _verify_paypal_signature(headers: Dict[str, str], event: Dict[str, Any]) -> bool:
+def _verify_paypal_signature(headers: Dict[str, str], event: Dict[str, Any], raw_body: bytes) -> bool:
     webhook_id = os.getenv("PAYPAL_WEBHOOK_ID", "").strip()
     if not webhook_id:
         return False
@@ -137,10 +137,14 @@ def _verify_paypal_signature(headers: Dict[str, str], event: Dict[str, Any]) -> 
     if not all(required.values()):
         return False
     token = _get_paypal_access_token()
+    # Embed the original webhook JSON bytes verbatim. PayPal warns that
+    # parse-and-reserialize can invalidate postback verification.
+    envelope = json.dumps(required | {"webhook_id": webhook_id}, separators=(",", ":")).encode("utf-8")
+    request_body = envelope[:-1] + b',"webhook_event":' + raw_body + b'}'
     response = requests.post(
         f"{PAYPAL_BASE_URL}/v1/notifications/verify-webhook-signature",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json={**required, "webhook_id": webhook_id, "webhook_event": event},
+        data=request_body,
         timeout=PAYPAL_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
@@ -179,15 +183,16 @@ def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,
 
     @router.post("/paypal/webhook", status_code=202)
     async def paypal_webhook(request: Request):
+        raw_body = await request.body()
         try:
-            event = await request.json()
-        except Exception:
+            event = json.loads(raw_body)
+        except (ValueError, UnicodeDecodeError):
             raise HTTPException(status_code=400, detail="Invalid webhook JSON.")
         if not isinstance(event, dict):
             raise HTTPException(status_code=400, detail="Invalid webhook payload.")
         headers = {key.lower(): value for key, value in request.headers.items()}
         try:
-            verified = await asyncio.to_thread(_verify_paypal_signature, headers, event)
+            verified = await asyncio.to_thread(_verify_paypal_signature, headers, event, raw_body)
         except Exception:
             raise HTTPException(status_code=503, detail="PayPal webhook verification is temporarily unavailable.")
         if not verified:
