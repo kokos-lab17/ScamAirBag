@@ -303,6 +303,33 @@ def test_gemini_extraction_falls_back_after_transient_primary_error(monkeypatch)
     assert calls == ["primary-test", "fallback-test"]
 
 
+def test_public_trace_exposes_allowlisted_domain_evidence_only():
+    trace = InvestigationTrace(
+        input_context=InvestigationInput(user_text="Check https://example.com"),
+        steps=[InvestigationStep(
+            step_number=1,
+            decision=AgentDecision(
+                action="CALL_TOOL", selected_tool="domain_intelligence",
+                rationale="Check public domain metadata",
+                arguments={"domain_or_url": "example.com"},
+            ),
+            result=ToolExecutionResult(
+                tool_name="domain_intelligence", status="SUCCESS",
+                provenance=EvidenceProvenance.OBSERVED_EXTERNAL,
+                data={
+                    "domain": "example.com", "dns_status": "SUCCESS",
+                    "resolved_ips": ["93.184.216.34"], "tls_status": "VALID",
+                    "tls_hostname_verified": True,
+                    "registrant_email": "private@example.com",
+                },
+            ),
+        )],
+    )
+    public = main._public_trace(trace)
+    assert public["domain_evidence"][0]["observations"]["tls_status"] == "VALID"
+    assert public["domain_evidence"][0]["observations"]["resolved_ips"] == ["93.184.216.34"]
+    assert "registrant_email" not in str(public)
+
 def test_public_trace_does_not_expose_model_rationale():
     trace = InvestigationTrace(
         input_context=InvestigationInput(user_text="Check this request"),
