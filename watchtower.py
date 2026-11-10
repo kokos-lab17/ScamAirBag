@@ -155,7 +155,7 @@ def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,
             counts={r["status"]:r["count"] for r in db.execute("SELECT status,COUNT(*) AS count FROM watchtower_events GROUP BY status")}
             latest=db.execute("SELECT received_at FROM watchtower_events ORDER BY received_at DESC LIMIT 1").fetchone()
         return {"service":"watchtower","state":"READY","demo_enabled":_DEMO_ENABLED,
-        "authenticated_ingest_configured":bool(_INGEST_TOKEN),"storage":"sqlite",
+        "authenticated_ingest_configured":bool(_INGEST_TOKEN),"paypal_webhook_configured":bool(os.getenv("PAYPAL_WEBHOOK_ID") and os.getenv("PAYPAL_CLIENT_ID") and os.getenv("PAYPAL_CLIENT_SECRET")),"paypal_webhook_path":"/api/v1/watchtower/paypal/webhook","accepted_paypal_event_types":["INVOICING.INVOICE.CREATED","INVOICING.INVOICE.SENT","INVOICING.INVOICE.UPDATED"],"storage":"sqlite",
         "storage_note":"History survives restarts only when the host has persistent disk storage.",
         "counts":counts,"last_event_at":latest["received_at"] if latest else None,
         "monitoring_claim":"Event listener is ready; it does not poll PayPal or receive PayPal webhooks until a verified external source is configured."}
