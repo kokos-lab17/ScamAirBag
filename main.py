@@ -156,7 +156,7 @@ def _public_trace(trace: InvestigationTrace) -> Dict[str, Any]:
         steps.append({
             "step_number": step.step_number,
             "tool_name": step.decision.selected_tool,
-            "rationale": step.decision.rationale,
+            # Do not expose model-generated rationale in the public audit response.
             "status": result.status if result else "DECISION_ONLY",
             "provenance": result.provenance.value if result else None,
             "error_code": result.error_code if result else None,
