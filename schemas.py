@@ -183,6 +183,7 @@ class InvestigationTrace(BaseModel):
     steps: List[InvestigationStep] = Field(default_factory=list)
     source_outcomes: List[SourceOutcome] = Field(default_factory=list)
     final_scorecard: Optional[AirbagScorecard] = None
+    evidence_manifest: Optional[Dict[str, Any]] = None
 
 
 # ==============================================================================
