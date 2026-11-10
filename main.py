@@ -151,7 +151,7 @@ def _dump_model(value: Any) -> Dict[str, Any]:
 def _public_domain_evidence(trace: InvestigationTrace) -> list[Dict[str, Any]]:
     """Expose a strict allowlist of non-personal domain observations."""
     allowed = {
-        "domain", "initial_url", "initial_host", "final_host", "resolved_ips", "dns_status", "whois_status",
+        "domain", "lookalike_observation", "initial_url", "initial_host", "final_host", "resolved_ips", "dns_status", "whois_status",
         "creation_date", "domain_age_days", "whois_available",
         "tls_status", "tls_checked", "tls_issuer", "tls_not_before",
         "tls_not_after", "tls_days_until_expiry", "tls_subject_alt_names",
