@@ -87,11 +87,12 @@ def _require_ingest_token(token:Optional[str]):
 def _create_event(event_id,source,event_type,identifier,hint):
     now=_now()
     with _db() as db:
-        db.execute("""INSERT OR IGNORE INTO watchtower_events
+        cursor=db.execute("""INSERT OR IGNORE INTO watchtower_events
         (event_id,source,event_type,identifier,identifier_hint,status,received_at,updated_at)
         VALUES (?,?,?,?,?,'RECEIVED',?,?)""",(event_id,source,event_type,identifier,hint,now,now))
+        inserted = cursor.rowcount == 1
         r=db.execute("SELECT * FROM watchtower_events WHERE event_id=?",(event_id,)).fetchone()
-    return _row(r)
+    return _row(r), not inserted
 
 def _update(event_id,**values):
     allowed={"status","started_at","completed_at","result_json","error_code"}
@@ -100,9 +101,15 @@ def _update(event_id,**values):
     with _db() as db: db.execute(f"UPDATE watchtower_events SET {sql} WHERE event_id=?",(*fields.values(),event_id))
 
 async def _investigate_event(event_id,public_trace):
-    with _db() as db: r=db.execute("SELECT * FROM watchtower_events WHERE event_id=?",(event_id,)).fetchone()
-    if r is None or r["status"]!="RECEIVED": return
-    _update(event_id,status="INVESTIGATING",started_at=_now())
+    now = _now()
+    with _db() as db:
+        claimed = db.execute(
+            "UPDATE watchtower_events SET status='INVESTIGATING', started_at=?, updated_at=? WHERE event_id=? AND status='RECEIVED'",
+            (now, now, event_id),
+        )
+        if claimed.rowcount != 1:
+            return
+        r=db.execute("SELECT * FROM watchtower_events WHERE event_id=?",(event_id,)).fetchone()
     try:
         payload=InvestigationInput(identifier=r["identifier"],identifier_hint=r["identifier_hint"])
         trace=await asyncio.to_thread(run_investigation,payload)
