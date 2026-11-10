@@ -6,6 +6,7 @@ on:
       - assistant/fix-local-api-routing
       - feature/investigation-refinement
       - production-hardening
+      - release/evidence-backed-autonomy
   pull_request:
     branches:
       - assistant/fix-local-api-routing
