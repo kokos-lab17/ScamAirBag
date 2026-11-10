@@ -38,7 +38,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from agent import run_investigation
 from schemas import InvestigationInput, InvestigationTrace
-from watchtower import build_watchtower_router
+from watchtower import build_watchtower_router, resume_watchtower_jobs
 
 logger = logging.getLogger("scamairbag.api")
 
@@ -218,6 +218,11 @@ def _public_trace(trace: InvestigationTrace) -> Dict[str, Any]:
 
 
 app.include_router(build_watchtower_router(_public_trace))
+
+@app.on_event("startup")
+async def recover_watchtower_jobs_on_startup() -> None:
+    await resume_watchtower_jobs(_public_trace)
+
 
 def _sse(event_name: str, payload: Dict[str, Any]) -> str:
     """Encode one standards-compliant SSE message."""
