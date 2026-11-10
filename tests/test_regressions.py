@@ -194,6 +194,45 @@ def test_tls_observation_reports_certificate_verification_failure(monkeypatch):
     assert result["tls_error"] == "TLS_CERTIFICATE_VERIFICATION_FAILED"
     assert result["tls_hostname_verified"] is False
 
+
+def test_redirect_inspection_records_cross_domain_redirects(monkeypatch):
+    monkeypatch.setattr(tools, "_resolve_domain", lambda host: ["93.184.216.34"])
+    calls = []
+    def fake_head(url, domain, ip):
+        calls.append((url, domain, ip))
+        if domain == "short.example":
+            return {"status_code": 302, "location": "https://destination.example/login"}
+        return {"status_code": 200, "location": None}
+    monkeypatch.setattr(tools, "_head_request_pinned", fake_head)
+
+    result = tools.tool_link_redirect_inspection("https://short.example/a")
+
+    assert result.status == "SUCCESS"
+    assert result.data["initial_host"] == "short.example"
+    assert result.data["final_host"] == "destination.example"
+    assert result.data["cross_domain_redirect"] is True
+    assert len(result.data["redirect_hops"]) == 2
+    assert len(calls) == 2
+
+
+def test_redirect_inspection_blocks_private_destination(monkeypatch):
+    def fake_resolve(host):
+        if host == "short.example":
+            return ["93.184.216.34"]
+        return ["127.0.0.1"]
+    monkeypatch.setattr(tools, "_resolve_domain", fake_resolve)
+    monkeypatch.setattr(
+        tools, "_head_request_pinned",
+        lambda url, domain, ip: {"status_code": 302, "location": "http://internal.example/admin"},
+    )
+
+    result = tools.tool_link_redirect_inspection("https://short.example/a")
+
+    assert result.status == "SUCCESS"
+    assert result.data["blocked_unsafe_destination"] is True
+    assert result.data["redirect_hops"][-1]["status"] == "BLOCKED_NON_PUBLIC_DNS"
+
+
 def test_link_extraction_detects_malformed_paypal_link():
     result = tools._extract_link_evidence("PayPal link:123hduyen23unfhjc")
     assert result["detected_urls"] == []
