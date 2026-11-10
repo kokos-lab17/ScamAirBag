@@ -175,7 +175,7 @@ def _compare_claimed_amount(entities: ExtractedEntities, tool_results: Sequence[
         return None, "The message's currency could not be established unambiguously, so no cross-source amount comparison was made."
     # The quoted text itself must support both the numeric value and currency;
     # this prevents a model from attaching an unrelated exact quote to a guess.
-    numeric_quote = re.search(r"(?<![\\d.])(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{1,2})?(?![\\d.])", quote)
+    numeric_quote = re.search(r"(?<![\d.])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?(?![\d.])", quote)
     if not numeric_quote:
         return None, "The exact supporting quote does not contain a parseable payment amount."
     explicit_currency = currency in quote.upper()
