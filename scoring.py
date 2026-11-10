@@ -663,6 +663,56 @@ def _build_findings(
             ))
 
 
+    # A static brand-domain comparison is a lead only; the exact heuristic and
+    # matched reference are preserved in the supporting evidence.
+    for domain_result in (item for item in tool_results if item.tool_name == "domain_intelligence"):
+        observation = domain_result.data.get("lookalike_observation") or {}
+        if observation.get("status") == "POTENTIAL_MATCH":
+            matches = observation.get("matches") or []
+            findings.append(_make_finding(
+                "POTENTIAL_BRAND_LOOKALIKE",
+                "The observed hostname resembles a known brand domain or places a brand name in a deceptive subdomain. Similarity is not proof of impersonation.",
+                RiskLevel.MEDIUM, EvidenceProvenance.OBSERVED_EXTERNAL, 20,
+                f"Observed domain: {domain_result.data.get('domain')}; heuristic matches: {matches[:3]}; reference set: {observation.get('reference_domains', [])}.",
+            ))
+
+    # Redirect behaviour is observed without downloading page content.
+    for redirect in (item for item in tool_results if item.tool_name == "link_redirect_inspection"):
+        if redirect.status != "SUCCESS":
+            continue
+        if redirect.data.get("https_downgrade"):
+            findings.append(_make_finding(
+                "HTTPS_TO_HTTP_DOWNGRADE",
+                "The submitted link redirects from HTTPS to HTTP, removing transport encryption for the destination.",
+                RiskLevel.HIGH, EvidenceProvenance.OBSERVED_EXTERNAL, 20,
+                f"Initial host: {redirect.data.get('initial_host')}; final host: {redirect.data.get('final_host')}.",
+            ))
+        if redirect.data.get("cross_domain_redirect"):
+            findings.append(_make_finding(
+                "CROSS_DOMAIN_REDIRECT",
+                "The submitted link redirects to a different hostname. This can be legitimate, but the final destination should be checked independently.",
+                RiskLevel.MEDIUM, EvidenceProvenance.OBSERVED_EXTERNAL, 10,
+                f"Initial host: {redirect.data.get('initial_host')}; final host: {redirect.data.get('final_host')}; hops: {redirect.data.get('redirect_hops', [])[:5]}.",
+            ))
+
+    # Pasted email authentication headers are user-provided claims, not
+    # cryptographic verification. Report failures as caution, not proof.
+    for header_result in (item for item in tool_results if item.tool_name == "email_authentication_headers"):
+        if header_result.status != "SUCCESS":
+            continue
+        methods = []
+        for auth in header_result.data.get("authentication_results") or []:
+            methods.extend(auth.get("methods") or [])
+        methods.extend({"method": "spf", "result": item.get("result")} for item in header_result.data.get("received_spf_results") or [])
+        failures = [item for item in methods if str(item.get("result", "")).lower() in {"fail", "softfail", "permerror", "temperror"}]
+        if failures:
+            findings.append(_make_finding(
+                "EMAIL_AUTHENTICATION_FAILURE_CLAIM",
+                "The pasted email headers contain SPF, DKIM, or DMARC failure claims. These header values were not independently authenticated.",
+                RiskLevel.MEDIUM, EvidenceProvenance.USER_PROVIDED, 10,
+                f"Header claims: {failures[:10]}; source: user-pasted email headers.",
+            ))
+
     # Domain age and historical matches are contextual signals, not proof.
     domain_results = [item for item in tool_results if item.tool_name == "domain_intelligence"]
     for domain_result in domain_results:
