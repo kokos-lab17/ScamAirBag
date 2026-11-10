@@ -259,13 +259,22 @@ def _parse_decision(arguments: Any) -> AgentDecision:
     return decision
 
 
-def _function_response(types: Any, payload: Dict[str, Any], call_id: Optional[str]) -> Any:
+def _function_response(
+    types: Any,
+    payload: Dict[str, Any],
+    call_id: Optional[str],
+) -> Any:
+    function_response = types.FunctionResponse(
+        id=call_id,
+        name="submit_agent_decision",
+        response=payload,
+    )
+
     return types.Content(
         role="user",
         parts=[
-            types.Part.from_function_response(
-                name="submit_agent_decision",
-                response=payload,
+            types.Part(
+                function_response=function_response,
             )
         ],
     )
