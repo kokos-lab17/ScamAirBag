@@ -205,10 +205,45 @@ def tool_paypal_subscription(subscription_id: str) -> ToolExecutionResult:
         )
         subscriber = sub.get("subscriber") or {}
         billing = sub.get("billing_info") or {}
+        plan_id = sub.get("plan_id")
+        plan_summary: Dict[str, Any] = {"plan_details_status": "NOT_AVAILABLE"}
+        if isinstance(plan_id, str) and plan_id:
+            try:
+                plan = _paypal_get(f"/v1/billing/plans/{_validate_identifier(plan_id)}")
+                cycles = []
+                for cycle in plan.get("billing_cycles") or []:
+                    frequency = cycle.get("frequency") or {}
+                    pricing = cycle.get("pricing_scheme") or {}
+                    fixed_price = pricing.get("fixed_price") or {}
+                    cycles.append({
+                        "tenure_type": cycle.get("tenure_type"),
+                        "sequence": cycle.get("sequence"),
+                        "total_cycles": cycle.get("total_cycles"),
+                        "interval_unit": frequency.get("interval_unit"),
+                        "interval_count": frequency.get("interval_count"),
+                        "price_value": fixed_price.get("value"),
+                        "currency_code": fixed_price.get("currency_code"),
+                    })
+                plan_summary = {
+                    "plan_details_status": "VERIFIED",
+                    "plan_name": plan.get("name"),
+                    "plan_status": plan.get("status"),
+                    "product_id": plan.get("product_id"),
+                    "billing_cycles": cycles,
+                    "auto_bill_outstanding": (plan.get("payment_preferences") or {}).get("auto_bill_outstanding"),
+                    "setup_fee": (plan.get("payment_preferences") or {}).get("setup_fee"),
+                    "taxes": plan.get("taxes"),
+                }
+            except Exception as plan_exc:
+                plan_summary = {
+                    "plan_details_status": "UNAVAILABLE",
+                    "plan_error_code": _paypal_failure("paypal_subscription_plan", plan_exc).error_code,
+                }
         data = {
             "subscription_id": sub.get("id"),
             "status": sub.get("status"),
-            "plan_id": sub.get("plan_id"),
+            "plan_id": plan_id,
+            **plan_summary,
             "subscriber_name": subscriber.get("name"),
             "subscriber_email": subscriber.get("email_address"),
             "start_time": sub.get("start_time"),
@@ -216,6 +251,8 @@ def tool_paypal_subscription(subscription_id: str) -> ToolExecutionResult:
             "update_time": sub.get("update_time"),
             "next_billing_time": billing.get("next_billing_time"),
             "failed_payments_count": billing.get("failed_payments_count"),
+            "outstanding_balance": billing.get("outstanding_balance"),
+            "last_payment": billing.get("last_payment"),
             "cycle_executions": billing.get("cycle_executions") or [],
         }
         return _result(name, "SUCCESS", EvidenceProvenance.VERIFIED_PAYPAL, data)
