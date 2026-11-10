@@ -45,7 +45,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agent import run_investigation
 from schemas import InvestigationInput, InvestigationTrace
-from watchtower import build_watchtower_router, resume_watchtower_jobs
+from watchtower import _get_setting, build_watchtower_router, resume_watchtower_jobs
 from evidence_manifest import build_evidence_manifest, verify_evidence_manifest
 
 logger = logging.getLogger("scamairbag.api")
@@ -353,7 +353,7 @@ async def readiness() -> JSONResponse:
         "production_service_token_configured": service_token_configured if APP_ENV in {"production", "prod"} else True,
         "evidence_signing_key_configured": signing_key_configured,
         "watchtower_storage_directory_writable": storage_writable,
-        "paypal_webhook_id_configured": bool(os.getenv("PAYPAL_WEBHOOK_ID")),
+        "paypal_webhook_id_configured": bool(_get_setting("PAYPAL_WEBHOOK_ID") or os.getenv("PAYPAL_WEBHOOK_ID")),
     }
     required = [
         "gemini_configured", "paypal_credentials_configured",
