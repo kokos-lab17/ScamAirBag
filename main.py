@@ -151,16 +151,16 @@ def _dump_model(value: Any) -> Dict[str, Any]:
 def _public_domain_evidence(trace: InvestigationTrace) -> list[Dict[str, Any]]:
     """Expose a strict allowlist of non-personal domain observations."""
     allowed = {
-        "domain", "resolved_ips", "dns_status", "whois_status",
+        "domain", "initial_url", "initial_host", "final_host", "resolved_ips", "dns_status", "whois_status",
         "creation_date", "domain_age_days", "whois_available",
         "tls_status", "tls_checked", "tls_issuer", "tls_not_before",
         "tls_not_after", "tls_days_until_expiry", "tls_subject_alt_names",
-        "tls_hostname_verified", "tls_error",
+        "tls_hostname_verified", "tls_error", "redirect_hops", "cross_domain_redirect", "https_downgrade", "redirect_loop_detected", "redirect_limit_reached", "blocked_unsafe_destination", "inspection_method",
     }
     evidence = []
     for step in trace.steps:
         result = step.result
-        if not result or result.tool_name != "domain_intelligence":
+        if not result or result.tool_name not in {"domain_intelligence", "link_redirect_inspection"}:
             continue
         safe_data = {key: value for key, value in result.data.items() if key in allowed}
         evidence.append({
