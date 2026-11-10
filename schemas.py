@@ -15,6 +15,7 @@ class EvidenceProvenance(str, Enum):
     """Tracks the exact origin and verification level of every piece of data."""
     VERIFIED_PAYPAL = "VERIFIED_PAYPAL"       # Direct response from PayPal Sandbox API
     OBSERVED_EXTERNAL = "OBSERVED_EXTERNAL"   # Real DNS / WHOIS / Registrar lookups
+    USER_PROVIDED = "USER_PROVIDED"           # Data supplied directly by the user
     AI_INFERRED = "AI_INFERRED"               # Extracted or inferred by LLM forensic analysis
     UNAVAILABLE = "UNAVAILABLE"               # Requested check failed, timed out, or had no data
     HISTORICAL_CASE = "HISTORICAL_CASE"         # Prior opt-in, minimized investigation record
