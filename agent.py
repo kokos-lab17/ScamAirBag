@@ -513,6 +513,37 @@ def _required_checks_remaining(
     return remaining
 
 
+def _tool_call_already_attempted(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    steps: Sequence[InvestigationStep],
+) -> bool:
+    """Prevent the controller from spending its budget repeating the same evidence request."""
+    argument_name = {
+        "extract_message_context": "user_text",
+        "paypal_invoice": "invoice_id",
+        "paypal_order": "order_id",
+        "paypal_subscription": "subscription_id",
+        "domain_intelligence": "domain_or_url",
+        "historical_pattern_search": "domain_or_url",
+        "threat_intelligence": "domain_or_url",
+        "link_redirect_inspection": "url",
+    }.get(tool_name)
+    if not argument_name:
+        return False
+    candidate = str(arguments.get(argument_name) or "")
+    for step in steps:
+        if step.decision.selected_tool != tool_name:
+            continue
+        previous = str(step.decision.arguments.get(argument_name) or "")
+        if tool_name in {"domain_intelligence", "historical_pattern_search", "threat_intelligence"}:
+            if _domain_input_key(candidate) == _domain_input_key(previous):
+                return True
+        elif candidate == previous:
+            return True
+    return False
+
+
 def _tool_target_is_grounded(
     tool_name: str,
     arguments: Dict[str, Any],
@@ -866,6 +897,16 @@ def run_investigation(
                     break
 
             if decision.action == "CALL_TOOL":
+                if _tool_call_already_attempted(
+                    decision.selected_tool, decision.arguments, trace.steps
+                ):
+                    contents.append(_function_response(types, {
+                        "accepted": False,
+                        "error": "This exact evidence request has already been attempted in the current investigation.",
+                    }, call.id))
+                    feedback = "Do not repeat an evidence request that has already run. Select a different applicable check or finish."
+                    continue
+
                 if not _tool_target_is_grounded(
                     decision.selected_tool, decision.arguments, input_context, results
                 ):
