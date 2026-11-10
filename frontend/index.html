@@ -71,6 +71,7 @@
     <section id="watchtower" class="panel" style="margin-bottom:18px">
       <div class="panel-head"><h2 class="section-title">Airbag Watchtower</h2><span id="watchtowerState" class="eyebrow">Checking listener…</span></div>
       <p id="watchtowerNote" class="hint">Event-driven monitoring workspace. Live PayPal monitoring is not claimed until a verified event source is connected.</p>
+      <div class="field"><label for="watchtowerToken">Watchtower access token</label><input id="watchtowerToken" type="password" autocomplete="off" placeholder="Enter the API service's WATCHTOWER_INGEST_TOKEN"><div class="hint">Required to view private event history and trigger demo investigations. Kept in this page only; do not share it.</div></div>
       <div class="input-grid">
         <div class="field"><label for="watchtowerInvoice">PayPal Sandbox invoice ID</label><input id="watchtowerInvoice" maxlength="200" placeholder="Enter an existing Sandbox invoice ID"></div>
         <div class="field" style="display:flex;align-items:end"><button id="simulateInvoiceButton" class="btn" type="button" disabled>Simulate incoming invoice event</button></div>
@@ -412,12 +413,12 @@
         try {
           const [statusResponse, eventsResponse] = await Promise.all([
             fetch(`${base}/api/v1/watchtower/status`),
-            fetch(`${base}/api/v1/watchtower/events?limit=20`)
+            fetch(`${base}/api/v1/watchtower/events?limit=20`, { headers: { "X-Watchtower-Token": $("watchtowerToken").value.trim() } })
           ]);
-          if (!statusResponse.ok || !eventsResponse.ok) throw new Error("Watchtower API unavailable");
+          if (!statusResponse.ok) throw new Error("Watchtower API unavailable");\n          if (eventsResponse.status === 401) throw new Error("Enter the Watchtower access token to view event history.");\n          if (!eventsResponse.ok) throw new Error("Unable to load Watchtower event history.");
           const status = await statusResponse.json(); const data = await eventsResponse.json();
           $("watchtowerState").textContent = status.paypal_webhook_configured ? "PAYPAL WEBHOOK READY" : "LISTENER READY · WEBHOOK NOT CONFIGURED";
-          $("simulateInvoiceButton").disabled = !status.demo_enabled;
+          $("simulateInvoiceButton").disabled = !status.demo_enabled || !$("watchtowerToken").value.trim();
           $("watchtowerNote").textContent = `${status.monitoring_claim} PayPal webhook ${status.paypal_webhook_configured ? "is configured" : "is not configured"} at ${status.paypal_webhook_path}.`;
           const alertsHost = $("watchtowerAlerts"); alertsHost.replaceChildren();
           const alerts = data.events.map(item => ({item, alert: item.result?.watchtower_alert}))
@@ -457,7 +458,7 @@
             inspect.addEventListener("click", async () => {
               try {
                 const base = $("apiBase").value.trim().replace(/\\/+$/, "");
-                const response = await fetch(`${base}/api/v1/watchtower/events/${encodeURIComponent(item.event_id)}`);
+                const response = await fetch(`${base}/api/v1/watchtower/events/${encodeURIComponent(item.event_id)}`, { headers: { "X-Watchtower-Token": $("watchtowerToken").value.trim() } });
                 const detail = await response.json(); if (!response.ok) throw new Error(detail.detail || "Unable to load event evidence.");
                 renderWatchtowerDetail(detail);
               } catch (error) { $("watchtowerActionStatus").textContent = error.message; }
@@ -470,6 +471,10 @@
           $("watchtowerActionStatus").textContent = error.message;
         }
       }
+      $("watchtowerToken").addEventListener("input", () => {
+        $("simulateInvoiceButton").disabled = !$("watchtowerToken").value.trim();
+        refreshWatchtower();
+      });
       $("refreshWatchtower").addEventListener("click", refreshWatchtower);
       $("simulateInvoiceButton").addEventListener("click", async () => {
         const identifier = $("watchtowerInvoice").value.trim();
@@ -489,7 +494,7 @@
           const poll = async () => {
             await refreshWatchtower();
             if (Date.now() - started < 120000) {
-              const latest = await fetch(`${base}/api/v1/watchtower/events?limit=30`).then(r => r.json()).catch(() => ({events:[]}));
+              const latest = await fetch(`${base}/api/v1/watchtower/events?limit=30`, { headers: { "X-Watchtower-Token": $("watchtowerToken").value.trim() } }).then(r => r.json()).catch(() => ({events:[]}));
               if (latest.events.some(e => e.event_id === result.event.event_id && ["RECEIVED","INVESTIGATING"].includes(e.status))) setTimeout(poll, 2500);
             }
           };
