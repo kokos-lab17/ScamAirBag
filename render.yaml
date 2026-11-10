@@ -29,6 +29,10 @@ services:
         sync: false
       - key: PAYPAL_CLIENT_SECRET
         sync: false
+      - key: VIRUSTOTAL_API_KEY
+        sync: false
+      - key: THREAT_INTEL_TIMEOUT_SECONDS
+        value: "8"
       - key: ELASTICSEARCH_URL
         sync: false
       - key: ELASTIC_API_KEY
