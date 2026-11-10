@@ -274,7 +274,7 @@
         for (const item of domainEvidence) {
           const card = document.createElement("div"); card.className = "detail";
           const heading = document.createElement("div"); heading.className = "detail-title";
-          heading.textContent = `Domain observations · ${safeText(item.observations?.domain || "Unknown domain", 200)}`;
+          heading.textContent = item.tool_name === "link_redirect_inspection" ? `Redirect observations · ${safeText(item.observations?.initial_host || "Unknown host", 200)}` : `Domain observations · ${safeText(item.observations?.domain || "Unknown domain", 200)}`;
           card.append(heading);
           const grid = document.createElement("div"); grid.className = "detail-grid";
           for (const [key, value] of Object.entries(item.observations || {})) {
