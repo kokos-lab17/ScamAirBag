@@ -550,7 +550,7 @@ def run_investigation(
                 except (TypeError, ValueError):
                     status_code = None
 
-                if status_code != 503 or active_model == GEMINI_FALLBACK_MODEL:
+                if status_code not in {503, 504} or active_model == GEMINI_FALLBACK_MODEL:
                     raise
 
                 logger.warning(
