@@ -668,7 +668,14 @@ def run_investigation(
         )
         trace.source_outcomes = outcomes
         trace.final_scorecard = scorecard
-        trace.status = "FAILED"
+        # A direct, typed PayPal lookup can still provide useful verified
+        # evidence without Gemini. Message-only requests cannot complete AI
+        # extraction and remain a hard failure.
+        has_verified_direct_evidence = any(
+            item.status == "SUCCESS" and item.provenance == EvidenceProvenance.VERIFIED_PAYPAL
+            for item in results
+        )
+        trace.status = "PARTIAL" if has_verified_direct_evidence and not input_context.user_text else "FAILED"
         trace.error_code = "GEMINI_API_KEY_MISSING"
         _emit(
             event_callback,
