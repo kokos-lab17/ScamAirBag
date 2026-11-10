@@ -68,6 +68,19 @@ def _public_evidence(tool_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
             "coercion_tactics", "unusual_payment_instructions",
         )
         return {key: entities[key] for key in keys if key in entities and entities[key] not in (None, [], "")}
+    if tool_name == "paypal_order":
+        units = []
+        for unit in data.get("purchase_units") or []:
+            if not isinstance(unit, dict):
+                continue
+            units.append({
+                key: unit[key] for key in ("reference_id", "payee_name", "payee_email", "amount", "invoice_id")
+                if key in unit and unit[key] is not None
+            })
+        return {
+            key: data[key] for key in ("order_id", "status", "intent")
+            if key in data and data[key] is not None
+        } | {"purchase_units": units}
     keys = allowlists.get(tool_name, ())
     return {key: data[key] for key in keys if key in data and data[key] is not None}
 
