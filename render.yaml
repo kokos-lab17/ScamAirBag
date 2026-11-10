@@ -61,6 +61,8 @@ services:
         sync: false
       - key: WATCHTOWER_DB_PATH
         value: /var/data/watchtower.sqlite3
+      - key: WATCHTOWER_MAX_CONCURRENT
+        value: "2"
       - key: WATCHTOWER_DEMO_ENABLED
         value: "false"
       - key: WATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE
