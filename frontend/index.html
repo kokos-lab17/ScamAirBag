@@ -528,7 +528,7 @@
           $("watchtowerActionStatus").textContent = error.message;
         }
       }
-      $("apiAccessToken").addEventListener("input", () => {
+      $("apiAccessToken").addEventListener("change", () => {
         const hasToken = Boolean($("apiAccessToken").value.trim());
         $("simulateInvoiceButton").disabled = !hasToken;
         $("registerPaypalWebhook").disabled = !hasToken;
