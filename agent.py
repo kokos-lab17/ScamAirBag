@@ -511,6 +511,23 @@ def run_investigation(
         "Investigation started.",
     )
 
+    if input_context.email_headers and input_context.email_headers.strip():
+        header_result = run_tool("email_authentication_headers", {"email_headers": input_context.email_headers})
+        results.append(header_result)
+        trace.steps.append(InvestigationStep(
+            step_number=1,
+            decision=AgentDecision(
+                action="CALL_TOOL", selected_tool="email_authentication_headers",
+                rationale="Parse supplied raw email authentication headers.",
+                arguments={"email_headers": "[provided]"},
+            ),
+            result=header_result,
+        ))
+        _emit(event_callback, InvestigationEventType.TOOL_COMPLETED,
+              "Email authentication header observations parsed.", step_number=1,
+              tool_name="email_authentication_headers",
+              data={"status": header_result.status, "error_code": header_result.error_code})
+
     if not api_key:
         scorecard, outcomes = score_investigation(
             input_context, extracted, results
