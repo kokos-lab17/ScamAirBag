@@ -178,7 +178,7 @@ def _compare_claimed_amount(entities: ExtractedEntities, tool_results: Sequence[
     numeric_quote = re.search(r"(?<![\d.])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?(?![\d.])", quote)
     if not numeric_quote:
         return None, "The exact supporting quote does not contain a parseable payment amount."
-    explicit_currency = currency in quote.upper()
+    explicit_currency = bool(re.search(rf"(?<![A-Z]){re.escape(currency)}(?![A-Z])", quote.upper()))
     unique_symbols = {"₹": "INR", "€": "EUR", "£": "GBP"}
     explicit_currency = explicit_currency or any(symbol in quote and code == currency for symbol, code in unique_symbols.items())
     if not explicit_currency:
