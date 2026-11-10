@@ -347,13 +347,17 @@ async def readiness() -> JSONResponse:
     db_path = os.getenv("WATCHTOWER_DB_PATH", "watchtower.sqlite3")
     storage_directory = os.path.dirname(os.path.abspath(db_path))
     storage_writable = os.path.isdir(storage_directory) and os.access(storage_directory, os.W_OK)
+    try:
+        paypal_webhook_configured = bool(_get_setting("PAYPAL_WEBHOOK_ID") or os.getenv("PAYPAL_WEBHOOK_ID"))
+    except Exception:
+        paypal_webhook_configured = False
     checks = {
         "gemini_configured": gemini_configured,
         "paypal_credentials_configured": paypal_configured,
         "production_service_token_configured": service_token_configured if APP_ENV in {"production", "prod"} else True,
         "evidence_signing_key_configured": signing_key_configured,
         "watchtower_storage_directory_writable": storage_writable,
-        "paypal_webhook_id_configured": bool(_get_setting("PAYPAL_WEBHOOK_ID") or os.getenv("PAYPAL_WEBHOOK_ID")),
+        "paypal_webhook_id_configured": paypal_webhook_configured,
     }
     required = [
         "gemini_configured", "paypal_credentials_configured",
