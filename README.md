@@ -132,15 +132,16 @@ Watchtower adds an event intake path that can wake the existing investigation ag
 ### Configure a PayPal Sandbox webhook
 
 1. Deploy the API over HTTPS and confirm `https://YOUR-API-HOST/api/v1/watchtower/status` responds.
-2. In the PayPal Developer Dashboard, open the Sandbox REST app used by ScamAirbag and add a webhook with this URL: `https://YOUR-API-HOST/api/v1/watchtower/paypal/webhook`.
-3. Subscribe to `INVOICING.INVOICE.CREATED`, `INVOICING.INVOICE.SENT`, `INVOICING.INVOICE.UPDATED`, `CHECKOUT.ORDER.APPROVED`, `BILLING.SUBSCRIPTION.CREATED`, `BILLING.SUBSCRIPTION.ACTIVATED`, and `BILLING.SUBSCRIPTION.UPDATED`.
-4. Copy the generated webhook ID into the API service environment as `PAYPAL_WEBHOOK_ID`. Keep the matching Sandbox `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` configured on that same service.
-5. Trigger a Sandbox invoice event and check Watchtower's event feed. Only events that pass PayPal's signature-verification API are recorded with source `VERIFIED_PAYPAL_WEBHOOK`. The handler preserves the original webhook body bytes when constructing PayPal's verification request, as PayPal warns that parsing and reserializing the event can invalidate verification.
+2. Set `WATCHTOWER_PUBLIC_API_URL=https://YOUR-API-HOST` and configure the existing Sandbox `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` on the API service.
+3. In the Watchtower dashboard, enter the `WATCHTOWER_INGEST_TOKEN` and click **Register PayPal webhook**. ScamAirbag creates the subscription with PayPal and saves the returned webhook ID in Watchtower settings.
+4. Copy the returned webhook ID into the API service environment as `PAYPAL_WEBHOOK_ID` as a persistence backup, especially if the host does not provide a persistent disk.
+5. Trigger a Sandbox invoice, order, or subscription event and check Watchtower's event feed. You can also manage subscriptions in the PayPal Developer Dashboard. Only events that pass PayPal's signature-verification API are recorded with source `VERIFIED_PAYPAL_WEBHOOK`. The handler preserves the original webhook body bytes when constructing PayPal's verification request, as PayPal warns that parsing and reserializing the event can invalidate verification.
 
 Required/optional environment variables:
 
 ```env
 PAYPAL_WEBHOOK_ID=your_sandbox_webhook_id
+WATCHTOWER_PUBLIC_API_URL=https://your-api-host.onrender.com
 WATCHTOWER_DEMO_ENABLED=true
 WATCHTOWER_INGEST_TOKEN=use-a-long-random-secret-for-your-own-integration
 WATCHTOWER_DB_PATH=/var/data/watchtower.sqlite3\nWATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE=false
@@ -155,6 +156,7 @@ WATCHTOWER_DB_PATH=/var/data/watchtower.sqlite3\nWATCHTOWER_SHARE_ANONYMIZED_INT
 | GET | `/api/v1/watchtower/status` | Listener/configuration status and event counts |
 | GET | `/api/v1/watchtower/events` | Recent event history |
 | GET | `/api/v1/watchtower/events/{event_id}` | One event and its safe public result |
+| POST | `/api/v1/watchtower/paypal/register` | Register supported events with the connected PayPal Sandbox app (token required) |
 | POST | `/api/v1/watchtower/paypal/webhook` | PayPal signature-verified webhook intake |
 | POST | `/api/v1/watchtower/events` | Shared-secret authenticated generic event intake |
 | POST | `/api/v1/watchtower/demo/simulate-invoice` | Explicitly simulated invoice event for demos |
