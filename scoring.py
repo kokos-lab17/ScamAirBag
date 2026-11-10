@@ -188,6 +188,18 @@ def build_source_outcomes(
     """Build coverage at the granularity of each applicable evidence check."""
     outcomes: List[SourceOutcome] = []
 
+    email_headers_applicable = bool(input_context.email_headers and input_context.email_headers.strip())
+    email_result = _result_by_name(tool_results, "email_authentication_headers")
+    if not email_headers_applicable:
+        outcomes.append(_source_outcome("email_authentication", False, "NOT_APPLICABLE",
+                                        EvidenceProvenance.UNAVAILABLE, "NO_EMAIL_HEADERS"))
+    elif email_result is None:
+        outcomes.append(_source_outcome("email_authentication", True, "SKIPPED",
+                                        EvidenceProvenance.UNAVAILABLE, "EMAIL_HEADER_CHECK_NOT_ATTEMPTED"))
+    else:
+        outcomes.append(_source_outcome("email_authentication", True, email_result.status,
+                                        email_result.provenance, email_result.error_code))
+
     extraction = _result_by_name(tool_results, "extract_message_context")
     message_applicable = bool(input_context.user_text and input_context.user_text.strip())
     if not message_applicable:
