@@ -199,7 +199,9 @@ def verify_evidence_manifest(manifest: Dict[str, Any], signing_key: str | None =
     signature = manifest.get("signature")
     signature_status = "UNSIGNED"
     if signature:
-        if not isinstance(signature, dict) or signature.get("algorithm") != "HMAC-SHA256":
+        if (not isinstance(signature, dict)
+                or signature.get("algorithm") != "HMAC-SHA256"
+                or signature.get("signer") != "ScamAirbag API"):
             signature_status = "INVALID_FORMAT"
             errors.append("Manifest signature format is unsupported.")
         elif not signing_key:
