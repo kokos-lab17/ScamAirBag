@@ -414,6 +414,22 @@
           host.append(pending); return;
         }
         const trace = item.result; const score = trace.final_scorecard;
+        if (Array.isArray(trace.historical_correlations) && trace.historical_correlations.length) {
+          const correlationTitle = document.createElement("div"); correlationTitle.className = "detail-title";
+          correlationTitle.textContent = "Recurring-domain context"; host.append(correlationTitle);
+          for (const correlation of trace.historical_correlations) {
+            const block = document.createElement("div"); block.className = "detail";
+            const text = document.createElement("div"); text.className = "detail-text";
+            text.textContent = `${correlation.domain} appeared in ${correlation.prior_case_observations} prior Watchtower case(s). ${correlation.interpretation}`;
+            block.append(text); host.append(block);
+          }
+        }
+        if (trace.evidence_manifest?.root_sha256) {
+          const receipt = document.createElement("div"); receipt.className = "detail";
+          const title = document.createElement("div"); title.className = "detail-title"; title.textContent = "Evidence receipt";
+          const hash = document.createElement("div"); hash.className = "detail-text"; hash.textContent = `SHA-256 root: ${trace.evidence_manifest.root_sha256}`;
+          receipt.append(title, hash); host.append(receipt);
+        }
         if (score) {
           const verdict = document.createElement("div"); verdict.className = "recommendation";
           verdict.textContent = `Risk index ${score.risk_score}/100 · Coverage ${score.coverage_score}% · Confidence ${pretty(score.confidence_level)}`;
