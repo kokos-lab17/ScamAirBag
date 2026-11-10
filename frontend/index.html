@@ -596,7 +596,7 @@
         const button = $("verifyEvidenceButton"); button.disabled = true;
         $("evidenceVerifyStatus").textContent = "Verifying evidence hashes…";
         try {
-          const base = $("apiBase").value.trim().replace(/\\/+$/, "");
+          const base = $("apiBase").value.trim().replace(/\/+$/, "");
           const token = $("apiAccessToken").value.trim();
           const headers = { "Content-Type": "application/json" };
           if (token) headers["X-Watchtower-Token"] = token;
