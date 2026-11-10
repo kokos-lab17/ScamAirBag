@@ -55,6 +55,7 @@ class InvestigationRequest(BaseModel):
         max_length=MAX_USER_TEXT_CHARS,
         description="Message, email, or payment request to investigate.",
     )
+    email_headers: Optional[str] = Field(default=None, max_length=12000, description="Optional raw email headers; do not include message body or unrelated personal data."),
     identifier: Optional[str] = Field(
         default=None,
         max_length=MAX_IDENTIFIER_CHARS,
@@ -70,7 +71,7 @@ class InvestigationRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_request(self) -> "InvestigationRequest":
-        if not (self.user_text and self.user_text.strip()) and not (
+        if not (self.user_text and self.user_text.strip()) and not (self.email_headers and self.email_headers.strip()) and not (
             self.identifier and self.identifier.strip()
         ):
             raise ValueError("Provide user_text, identifier, or both.")
@@ -86,9 +87,11 @@ class InvestigationRequest(BaseModel):
             self.identifier = self.identifier.strip() or None
         if self.user_text is not None:
             self.user_text = self.user_text.strip() or None
+        if self.email_headers is not None:
+            self.email_headers = self.email_headers.strip() or None
 
-        if self.identifier is None and self.user_text is None:
-            raise ValueError("At least one non-empty input is required.")
+        if self.identifier is None and self.user_text is None and self.email_headers is None:
+            raise ValueError("Provide a message, email headers, or a PayPal identifier.")
         if self.identifier is not None and hint == "UNKNOWN":
             raise ValueError("Select whether the PayPal ID is an invoice, order, or subscription.")
         return self
@@ -96,6 +99,7 @@ class InvestigationRequest(BaseModel):
     def to_investigation_input(self) -> InvestigationInput:
         return InvestigationInput(
             user_text=self.user_text,
+            email_headers=self.email_headers,
             identifier=self.identifier,
             identifier_hint=self.identifier_hint,
             share_anonymized_intelligence=self.share_anonymized_intelligence,
@@ -158,11 +162,15 @@ def _public_domain_evidence(trace: InvestigationTrace) -> list[Dict[str, Any]]:
         "tls_hostname_verified", "tls_error", "redirect_hops", "cross_domain_redirect", "https_downgrade", "redirect_loop_detected", "redirect_limit_reached", "blocked_unsafe_destination", "inspection_method",
     }
     evidence = []
+    email_allowed = {"header_parse_status", "authentication_results", "received_spf_results",
+                     "from_domain", "return_path_domain", "dkim_signing_domains",
+                     "header_fields_present", "alignment_observations", "limitations"}
     for step in trace.steps:
         result = step.result
-        if not result or result.tool_name not in {"domain_intelligence", "link_redirect_inspection"}:
+        if not result or result.tool_name not in {"domain_intelligence", "link_redirect_inspection", "email_authentication_headers"}:
             continue
-        safe_data = {key: value for key, value in result.data.items() if key in allowed}
+        selected = email_allowed if result.tool_name == "email_authentication_headers" else allowed
+        safe_data = {key: value for key, value in result.data.items() if key in selected}
         evidence.append({
             "tool_name": result.tool_name, "status": result.status,
             "provenance": result.provenance.value, "error_code": result.error_code,
@@ -190,6 +198,7 @@ def _public_trace(trace: InvestigationTrace) -> Dict[str, Any]:
         "background_job_status": trace.background_job_status,
         "input_summary": {
             "has_message": bool(trace.input_context.user_text),
+            "has_email_headers": bool(trace.input_context.email_headers),
             "has_identifier": bool(trace.input_context.identifier),
             "identifier_hint": trace.input_context.identifier_hint,
         },
