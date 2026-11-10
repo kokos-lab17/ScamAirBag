@@ -445,6 +445,16 @@ async def investigate_stream(
                 return await asyncio.to_thread(run_and_publish)
 
         worker = asyncio.create_task(bounded_worker())
+
+        def consume_worker_completion(task: asyncio.Task) -> None:
+            if task.cancelled():
+                return
+            try:
+                task.result()
+            except Exception:
+                logger.exception("Background investigation worker failed after stream closure")
+
+        worker.add_done_callback(consume_worker_completion)
         try:
             yield ": scamairbag investigation stream\n\n"
 
