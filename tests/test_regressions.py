@@ -626,3 +626,30 @@ def test_subscription_payer_email_is_not_mistaken_for_seller_domain(monkeypatch)
     )
     remaining = agent._required_checks_remaining(InvestigationInput(), [subscription], None, [])
     assert not any(name == "domain_intelligence" for name, _, _ in remaining)
+
+
+def test_watchtower_alert_policy_flags_high_risk_and_incomplete_results():
+    from watchtower import _build_watchtower_alert
+    from schemas import AirbagScorecard, RecommendedAction, InvestigationTrace, InvestigationInput
+
+    high = InvestigationTrace(
+        input_context=InvestigationInput(identifier="INV-1", identifier_hint="INVOICE"),
+        status="COMPLETED",
+        final_scorecard=AirbagScorecard(
+            risk_score=76, coverage_score=90, confidence_level="HIGH",
+            recommended_action=RecommendedAction.ABORT_PAYMENT,
+            executive_summary="Test", findings=[]
+        )
+    )
+    alert = _build_watchtower_alert(high)
+    assert alert["level"] == "CRITICAL"
+    assert alert["needs_attention"] is True
+    assert alert["recommended_action"] == "ABORT_PAYMENT"
+
+    partial = InvestigationTrace(
+        input_context=InvestigationInput(identifier="INV-2", identifier_hint="INVOICE"),
+        status="PARTIAL",
+    )
+    partial_alert = _build_watchtower_alert(partial)
+    assert partial_alert["level"] == "INCOMPLETE"
+    assert partial_alert["needs_attention"] is True
