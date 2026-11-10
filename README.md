@@ -51,7 +51,7 @@ minimized case indicators. It never receives raw messages or PayPal IDs.
 
 ## Features and safeguards
 
-- Correct PayPal seller fields: invoice `invoicer.email_address`; order `purchase_units[].payee.email_address`. Subscription `subscriber.email_address` is the payer, not the seller.
+- Correct PayPal seller fields: invoice `invoicer.email_address`; order `purchase_units[].payee.email_address`. Subscription `subscriber.email_address` is the payer, not the seller. Subscription investigations also retrieve the PayPal plan's verified billing-cycle price, currency, interval, status, and next billing time; plan-price availability is tracked as a separate coverage check.
 - Invoice private memo, recipient email addresses, and line-item descriptions are excluded from the invoice evidence payload.
 - User-supplied PayPal IDs require an explicit type: invoice, order, or subscription. IDs extracted from a message are queried only when the model classifies their type.
 - Domain checks are tracked separately per detected domain for DNS and WHOIS. An unchecked second domain cannot inherit the first domain's coverage.
