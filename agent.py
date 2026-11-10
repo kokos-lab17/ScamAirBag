@@ -134,7 +134,7 @@ INVESTIGATION:
 - If user_text exists, extract its context before relying on claims in it.
 - If the request has a recognized identifier_hint and identifier, perform the
   matching PayPal lookup unless it has already been attempted.
-- If message extraction found domains, use domain intelligence, VirusTotal when configured,
+- If message extraction found complete URLs, inspect their redirect chains. If it found domains, use domain intelligence, VirusTotal when configured,
   and Elastic historical search when configured. Do not repeat the same domain/input.
 - Historical matches are contextual only and must never be treated as proof of fraud.
 - Use tool results to decide whether another check adds material evidence.
@@ -397,7 +397,7 @@ def _required_checks_remaining(
     attempted_domain_inputs = set()
     for step in steps:
         if step.decision.selected_tool in {"domain_intelligence", "historical_pattern_search", "threat_intelligence", "link_redirect_inspection"}:
-            raw = step.decision.arguments.get("domain_or_url")
+            raw = step.decision.arguments.get("url") if step.decision.selected_tool == "link_redirect_inspection" else step.decision.arguments.get("domain_or_url")
             if raw:
                 attempted_domain_inputs.add((step.decision.selected_tool, _domain_input_key(str(raw))))
     remaining: List[Tuple[str, Dict[str, Any], str]] = []
