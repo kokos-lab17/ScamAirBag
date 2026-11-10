@@ -708,6 +708,14 @@ def run_investigation(
             },
         )
 
+    if cancel_event is not None and cancel_event.is_set():
+        trace.status = "PARTIAL"
+        trace.error_code = "CLIENT_DISCONNECTED"
+        scorecard, outcomes = score_investigation(input_context, extracted, results)
+        trace.source_outcomes = outcomes
+        trace.final_scorecard = scorecard
+        return trace
+
     if not api_key:
         scorecard, outcomes = score_investigation(
             input_context, extracted, results
