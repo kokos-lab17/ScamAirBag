@@ -427,3 +427,44 @@ def test_lookalike_domain_detector_does_not_flag_exact_canonical_domain():
     result = tools._lookalike_domain_observation("paypal.com")
     assert result["status"] == "NO_MATCH_IN_REFERENCE_SET"
     assert result["matches"] == []
+
+
+def test_email_authentication_header_parser_extracts_results_and_domains():
+    result = tools.inspect_email_authentication_headers(
+        "From: Billing <alerts@paypal.com>\\n"
+        "Return-Path: <bounce@mailer.example>\\n"
+        "Authentication-Results: mx.example; spf=pass smtp.mailfrom=mailer.example; "
+        "dkim=pass header.d=paypal.com; dmarc=fail header.from=paypal.com\\n"
+        "DKIM-Signature: v=1; d=paypal.com; s=mail; b=abc\\n\\nBody ignored"
+    )
+    assert result.status == "SUCCESS"
+    assert result.data["from_domain"] == "paypal.com"
+    assert result.data["return_path_domain"] == "mailer.example"
+    methods = result.data["authentication_results"][0]["methods"]
+    assert { (item["method"], item["result"]) for item in methods } == {
+        ("spf", "pass"), ("dkim", "pass"), ("dmarc", "fail")
+    }
+    assert result.data["dkim_signing_domains"] == ["paypal.com"]
+    assert "does not prove" in " ".join(result.data["limitations"])
+
+
+def test_email_authentication_header_parser_does_not_treat_missing_auth_results_as_pass():
+    result = tools.inspect_email_authentication_headers(
+        "From: User <user@example.com>\\nSubject: Test\\n"
+    )
+    assert result.status == "SUCCESS"
+    assert result.data["authentication_results"] == []
+    assert result.data["received_spf_results"] == []
+
+
+def test_email_headers_are_optional_but_valid_input():
+    request = main.InvestigationRequest(email_headers="From: user@example.com")
+    assert request.email_headers == "From: user@example.com"
+    assert request.to_investigation_input().email_headers == "From: user@example.com"
+
+
+def test_email_authentication_coverage_is_not_applicable_without_headers():
+    outcomes = build_source_outcomes(InvestigationInput(user_text="hello"), None, [])
+    email = next(item for item in outcomes if item.source_name == "email_authentication")
+    assert email.applicable is False
+    assert email.status == "NOT_APPLICABLE"
