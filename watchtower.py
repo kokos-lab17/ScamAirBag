@@ -246,6 +246,7 @@ async def resume_watchtower_jobs(public_trace: Callable[[InvestigationTrace], Di
 
 
 def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,Any]])->APIRouter:
+    init_watchtower()
     @router.get("/status")
     async def status():
         with _db() as db:
