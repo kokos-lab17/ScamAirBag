@@ -416,13 +416,19 @@
             fetch(`${base}/api/v1/watchtower/events?limit=20`, { headers: { "X-Watchtower-Token": $("watchtowerToken").value.trim() } })
           ]);
           if (!statusResponse.ok) throw new Error("Watchtower API unavailable");
-          if (eventsResponse.status === 401) throw new Error("Enter the Watchtower access token to view event history.");
-          if (!eventsResponse.ok) throw new Error("Unable to load Watchtower event history.");
-          const status = await statusResponse.json(); const data = await eventsResponse.json();
+          const status = await statusResponse.json();
           $("watchtowerState").textContent = status.paypal_webhook_configured ? "PAYPAL WEBHOOK READY" : "LISTENER READY · WEBHOOK NOT CONFIGURED";
           $("simulateInvoiceButton").disabled = !status.demo_enabled || !$("watchtowerToken").value.trim();
           $("watchtowerNote").textContent = `${status.monitoring_claim} PayPal webhook ${status.paypal_webhook_configured ? "is configured" : "is not configured"} at ${status.paypal_webhook_path}.`;
           const alertsHost = $("watchtowerAlerts"); alertsHost.replaceChildren();
+          if (eventsResponse.status === 401) {
+            $("watchtowerActionStatus").textContent = "Enter the Watchtower access token to view private event history.";
+            $("watchtowerEvents").textContent = "Event history is protected. Enter the access token above.";
+            alertsHost.textContent = "Alerts will appear here after authenticated event history loads.";
+            return;
+          }
+          if (!eventsResponse.ok) throw new Error("Unable to load Watchtower event history.");
+          const data = await eventsResponse.json();
           const alerts = data.events.map(item => ({item, alert: item.result?.watchtower_alert}))
             .filter(entry => entry.alert?.needs_attention);
           if (!alerts.length) {
