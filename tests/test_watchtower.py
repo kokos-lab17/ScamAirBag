@@ -77,3 +77,27 @@ def test_redirect_tool_contract_accepts_url_argument():
     })
     assert decision.selected_tool == "link_redirect_inspection"
     assert decision.arguments["url"] == "https://example.com/pay"
+
+
+def test_watchtower_correlates_recurring_domains_without_calling_them_fraud(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    first_id = "event-first"
+    second_id = "event-second"
+    first_result = {
+        "domain_evidence": [{
+            "observations": {"domain": "seller-example.test"},
+            "provenance": "OBSERVED_EXTERNAL",
+        }]
+    }
+    watchtower._create_event(first_id, "TEST", "INVOICE", "INV-FIRST", "INVOICE")
+    watchtower._update(first_id, status="COMPLETED", result_json=__import__("json").dumps(first_result))
+    current = {
+        "domain_evidence": [{
+            "observations": {"domain": "seller-example.test"},
+            "provenance": "OBSERVED_EXTERNAL",
+        }]
+    }
+    correlations = watchtower._correlate_prior_domains(second_id, current)
+    assert correlations[0]["domain"] == "seller-example.test"
+    assert correlations[0]["prior_case_observations"] == 1
+    assert "does not establish" in correlations[0]["interpretation"]
