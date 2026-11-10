@@ -18,6 +18,7 @@ import json
 import os
 import re
 import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -37,6 +38,7 @@ PAYPAL_BASE_URL = os.getenv("PAYPAL_BASE_URL", "https://api-m.sandbox.paypal.com
 PAYPAL_TIMEOUT_SECONDS = float(os.getenv("PAYPAL_TIMEOUT_SECONDS", "12"))
 DNS_TIMEOUT_SECONDS = float(os.getenv("DNS_TIMEOUT_SECONDS", "4"))
 WHOIS_TIMEOUT_SECONDS = float(os.getenv("WHOIS_TIMEOUT_SECONDS", "7"))
+TLS_TIMEOUT_SECONDS = float(os.getenv("TLS_TIMEOUT_SECONDS", "5"))
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash")
 
@@ -532,8 +534,47 @@ def _age_days(value: Optional[str]) -> Optional[int]:
             return None
 
 
+def _tls_certificate_observation(domain: str, resolved_ips: List[str]) -> Dict[str, Any]:
+    """Inspect HTTPS certificate metadata using a previously validated public IP.
+    The TCP connection is pinned to that IP; no HTTP page is requested.
+    """
+    context = ssl.create_default_context()
+    last_error = "TLS_CONNECTION_FAILED"
+    for ip in resolved_ips:
+        raw_socket = None
+        try:
+            raw_socket = socket.create_connection((ip, 443), timeout=TLS_TIMEOUT_SECONDS)
+            with context.wrap_socket(raw_socket, server_hostname=domain) as tls_socket:
+                certificate = tls_socket.getpeercert()
+            not_before = certificate.get("notBefore")
+            not_after = certificate.get("notAfter")
+            expiry_epoch = ssl.cert_time_to_seconds(not_after) if not_after else None
+            days_remaining = int((expiry_epoch - time.time()) // 86400) if expiry_epoch is not None else None
+            issuer_parts = [f"{key}={value}" for group in certificate.get("issuer", ()) for key, value in group]
+            sans = [value for kind, value in certificate.get("subjectAltName", ()) if kind == "DNS"]
+            return {
+                "tls_status": "VALID", "tls_checked": True,
+                "tls_issuer": ", ".join(issuer_parts)[:300],
+                "tls_not_before": not_before, "tls_not_after": not_after,
+                "tls_days_until_expiry": days_remaining,
+                "tls_subject_alt_names": sans[:30], "tls_hostname_verified": True,
+            }
+        except ssl.SSLCertVerificationError:
+            last_error = "TLS_CERTIFICATE_VERIFICATION_FAILED"
+            break
+        except (ssl.SSLError, OSError, TimeoutError):
+            last_error = "TLS_HANDSHAKE_OR_CONNECTION_FAILED"
+        finally:
+            if raw_socket is not None:
+                try: raw_socket.close()
+                except OSError: pass
+    return {
+        "tls_status": "INVALID" if last_error == "TLS_CERTIFICATE_VERIFICATION_FAILED" else "UNAVAILABLE",
+        "tls_checked": True, "tls_error": last_error, "tls_hostname_verified": False,
+    }
+
 def tool_domain_intelligence(domain_or_url: str) -> ToolExecutionResult:
-    """Observe DNS and WHOIS. No web page is fetched; non-global IPs are blocked."""
+    """Observe DNS, WHOIS, and TLS certificate metadata; never fetch page content."""
     name = "domain_intelligence"
     try:
         domain = _normalize_domain(domain_or_url)
@@ -583,6 +624,7 @@ def tool_domain_intelligence(domain_or_url: str) -> ToolExecutionResult:
         "dns_status": "SUCCESS", "whois_status": "FAILED",
         "whois_available": False, "creation_date": None, "domain_age_days": None,
     }
+    data.update(_tls_certificate_observation(domain, ips))
     try:
         whois_data = _whois_lookup(domain)
         if whois_data.get("error") == "WHOIS_PACKAGE_MISSING":
