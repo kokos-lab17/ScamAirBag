@@ -396,7 +396,7 @@ def _required_checks_remaining(
     attempted = {item.tool_name for item in results}
     attempted_domain_inputs = set()
     for step in steps:
-        if step.decision.selected_tool in {"domain_intelligence", "historical_pattern_search", "threat_intelligence"}:
+        if step.decision.selected_tool in {"domain_intelligence", "historical_pattern_search", "threat_intelligence", "link_redirect_inspection"}:
             raw = step.decision.arguments.get("domain_or_url")
             if raw:
                 attempted_domain_inputs.add((step.decision.selected_tool, _domain_input_key(str(raw))))
@@ -472,7 +472,7 @@ def _build_prompt(
                 "tool": step.decision.selected_tool,
                 "rationale": step.decision.rationale,
                 "result_status": step.result.status if step.result else None,
-                "domain_input": step.decision.arguments.get("domain_or_url") if step.decision.selected_tool in {"domain_intelligence", "historical_pattern_search", "threat_intelligence"} else None,
+                "domain_input": step.decision.arguments.get("domain_or_url") if step.decision.selected_tool in {"domain_intelligence", "historical_pattern_search", "threat_intelligence"} else step.decision.arguments.get("url") if step.decision.selected_tool == "link_redirect_inspection" else None,
             }
             for step in steps[-6:]
         ],
