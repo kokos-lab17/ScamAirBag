@@ -437,6 +437,18 @@ def _build_findings(
                 "Service-threat evidence"
             ): detected.add("service_threat")
             if add_text_finding(
+                "ACCOUNT_ACCESS_THREAT",
+                "The message threatens to restrict or permanently disable account access unless the recipient acts.",
+                RiskLevel.HIGH, 15,
+                [
+                    r"\baccount\b.{0,45}\b(?:limited|restricted|disabled|suspended|blocked)\b",
+                    r"\b(?:limited|restricted|disabled|suspended|blocked)\b.{0,45}\baccount\b",
+                    r"\bpermanently\s+disabled\b",
+                    r"\bno\s+longer\s+have\s+access\b",
+                ],
+                "Account-access threat evidence"
+            ): detected.add("account_access_threat")
+            if add_text_finding(
                 "FINANCIAL_PENALTY_THREAT",
                 "The sender threatens an additional financial penalty or charge if the recipient does not comply.",
                 RiskLevel.HIGH, 15,
@@ -460,7 +472,7 @@ def _build_findings(
             if add_text_finding(
                 "SENSITIVE_INFORMATION_REQUEST",
                 "The sender asks for account or other sensitive personal information outside a verified, trusted channel.",
-                RiskLevel.HIGH, 10,
+                RiskLevel.HIGH, 15,
                 [r"account\s+details", r"bank\s+details", r"card\s+details", r"send.{0,35}details", r"provide.{0,35}details"],
                 "Sensitive-information evidence"
             ): detected.add("sensitive_info")
