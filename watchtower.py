@@ -151,6 +151,23 @@ def _verify_paypal_signature(headers: Dict[str, str], event: Dict[str, Any], raw
     return response.json().get("verification_status") == "SUCCESS"
 
 
+async def resume_watchtower_jobs(public_trace: Callable[[InvestigationTrace], Dict[str, Any]]) -> None:
+    """Recover queued/interrupted work after an API process starts."""
+    init_watchtower()
+    with _db() as db:
+        # This app currently runs as one API worker. Re-queue interrupted jobs;
+        # the atomic claim in _investigate_event prevents duplicate execution.
+        db.execute(
+            "UPDATE watchtower_events SET status='RECEIVED', updated_at=? WHERE status='INVESTIGATING'",
+            (_now(),),
+        )
+        rows = db.execute(
+            "SELECT event_id FROM watchtower_events WHERE status='RECEIVED' ORDER BY received_at ASC"
+        ).fetchall()
+    for row in rows:
+        _schedule(row["event_id"], public_trace)
+
+
 def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,Any]])->APIRouter:
     init_watchtower()
     @router.get("/status")
