@@ -909,3 +909,46 @@ def test_pasted_email_authentication_failure_is_not_misrepresented_as_verified()
     finding = next(item for item in findings if item.rule_id == "EMAIL_AUTHENTICATION_FAILURE_CLAIM")
     assert finding.provenance == EvidenceProvenance.USER_PROVIDED
     assert finding.risk_impact == 10
+
+
+def test_agent_rejects_model_invented_external_domains():
+    assert not agent._tool_target_is_grounded(
+        "domain_intelligence", {"domain_or_url": "attacker.example"},
+        InvestigationInput(user_text="Please check https://paypal.com/login"), [],
+    )
+    assert agent._tool_target_is_grounded(
+        "domain_intelligence", {"domain_or_url": "paypal.com"},
+        InvestigationInput(user_text="Please check https://paypal.com/login"), [],
+    )
+
+
+def test_agent_only_inspects_exact_user_supplied_redirect_urls():
+    request = InvestigationInput(user_text="Open https://short.example/path")
+    assert agent._tool_target_is_grounded(
+        "link_redirect_inspection", {"url": "https://short.example/path"}, request, []
+    )
+    assert not agent._tool_target_is_grounded(
+        "link_redirect_inspection", {"url": "https://attacker.example/path"}, request, []
+    )
+
+
+def test_agent_can_inspect_domain_returned_by_verified_paypal_seller():
+    paypal = ToolExecutionResult(
+        tool_name="paypal_invoice", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"seller_email": "merchant@verified-seller.example"},
+    )
+    assert agent._tool_target_is_grounded(
+        "domain_intelligence", {"domain_or_url": "verified-seller.example"},
+        InvestigationInput(identifier="INV-1", identifier_hint="INVOICE"), [paypal],
+    )
+
+
+def test_evidence_manifest_metadata_is_covered_by_root_hash():
+    from evidence_manifest import build_evidence_manifest, verify_evidence_manifest
+
+    manifest = build_evidence_manifest(
+        InvestigationTrace(input_context=InvestigationInput(user_text="test"))
+    )
+    manifest["created_at"] = "2000-01-01T00:00:00+00:00"
+    assert verify_evidence_manifest(manifest)["valid"] is False
