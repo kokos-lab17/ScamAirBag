@@ -172,9 +172,9 @@ def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,
     @router.post("/events",status_code=202)
     async def ingest(payload:WatchtowerEventRequest,x_watchtower_token:Optional[str]=Header(default=None)):
         _require_ingest_token(x_watchtower_token)
-        record=_create_event(payload.event_id,"TOKEN_AUTHENTICATED_INGEST",payload.event_type,payload.identifier,payload.identifier_hint)
-        duplicate=record["status"]!="RECEIVED" or record["updated_at"]!=record["received_at"]
-        if not duplicate: _schedule(record["event_id"],public_trace)
+        record, duplicate = _create_event(payload.event_id,"TOKEN_AUTHENTICATED_INGEST",payload.event_type,payload.identifier,payload.identifier_hint)
+        if not duplicate:
+            _schedule(record["event_id"],public_trace)
         return {"accepted":True,"duplicate":duplicate,"event":record}
 
     @router.post("/paypal/webhook", status_code=202)
@@ -199,8 +199,7 @@ def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,
         invoice_id, event_id = resource.get("id"), event.get("id")
         if not isinstance(invoice_id, str) or not invoice_id.strip() or not isinstance(event_id, str) or not event_id.strip():
             raise HTTPException(status_code=400, detail="Verified invoice event is missing its event or invoice ID.")
-        record = _create_event(event_id, "VERIFIED_PAYPAL_WEBHOOK", event_type, invoice_id.strip(), "INVOICE")
-        duplicate = record["status"] != "RECEIVED" or record["updated_at"] != record["received_at"]
+        record, duplicate = _create_event(event_id, "VERIFIED_PAYPAL_WEBHOOK", event_type, invoice_id.strip(), "INVOICE")
         if not duplicate:
             _schedule(event_id, public_trace)
         return {"accepted": True, "duplicate": duplicate, "event": record}
@@ -209,7 +208,7 @@ def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,
     async def simulate(payload:DemoEventRequest):
         if not _DEMO_ENABLED: raise HTTPException(status_code=404,detail="Watchtower demo simulation is disabled.")
         event_id="demo-"+uuid.uuid4().hex
-        record=_create_event(event_id,"SANDBOX_SIMULATED","PAYPAL_SANDBOX_INVOICE_EVENT_SIMULATED",payload.identifier.strip(),"INVOICE")
+        record, _duplicate = _create_event(event_id,"SANDBOX_SIMULATED","PAYPAL_SANDBOX_INVOICE_EVENT_SIMULATED",payload.identifier,"INVOICE")
         _schedule(event_id,public_trace)
         return {"accepted":True,"event":record,"notice":"Simulated trigger only. ScamAirbag will attempt a real PayPal Sandbox invoice lookup; this is not a live PayPal webhook."}
     return router
