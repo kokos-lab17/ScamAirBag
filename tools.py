@@ -681,6 +681,93 @@ def tool_link_redirect_inspection(url: str) -> ToolExecutionResult:
 
 
 
+
+_KNOWN_BRAND_DOMAINS = (
+    "paypal.com", "google.com", "microsoft.com", "apple.com",
+    "amazon.com", "netflix.com", "facebook.com", "instagram.com",
+    "whatsapp.com", " ebay.com".strip(), "adobe.com", "linkedin.com",
+    "dropbox.com", "docusign.com",
+)
+
+def _edit_distance_at_most_one(left: str, right: str) -> bool:
+    """Return whether two strings differ by at most one insertion/deletion/substitution."""
+    if abs(len(left) - len(right)) > 1:
+        return False
+    if left == right:
+        return True
+    i = j = differences = 0
+    while i < len(left) and j < len(right):
+        if left[i] == right[j]:
+            i += 1
+            j += 1
+            continue
+        differences += 1
+        if differences > 1:
+            return False
+        if len(left) > len(right):
+            i += 1
+        elif len(right) > len(left):
+            j += 1
+        else:
+            i += 1
+            j += 1
+    if i < len(left) or j < len(right):
+        differences += 1
+    return differences <= 1
+
+
+def _lookalike_domain_observation(domain: str) -> Dict[str, Any]:
+    """
+    Compare a hostname against a small, explicit brand-domain reference set.
+    This is a heuristic indicator only; similarity does not establish ownership
+    or malicious intent. The reference set is deliberately disclosed in output.
+    """
+    hostname = domain.rstrip(".").casefold()
+    labels = hostname.split(".")
+    unicode_host = hostname
+    try:
+        unicode_host = hostname.encode("ascii").decode("idna")
+    except (UnicodeError, ValueError):
+        pass
+
+    canonical = set(_KNOWN_BRAND_DOMAINS)
+    matched = []
+    # Brand name in a deceptive subdomain, e.g. paypal.com.attacker.test.
+    for brand_domain in _KNOWN_BRAND_DOMAINS:
+        brand_label = brand_domain.split(".", 1)[0]
+        if brand_domain != hostname and brand_label in labels[:-2]:
+            matched.append({
+                "brand_domain": brand_domain,
+                "match_type": "BRAND_NAME_IN_SUBDOMAIN",
+                "observed_label": brand_label,
+            })
+    # One-edit lookalikes on the same common public suffix.
+    if len(labels) >= 2:
+        observed_label = labels[-2]
+        observed_suffix = ".".join(labels[-1:])
+        for brand_domain in _KNOWN_BRAND_DOMAINS:
+            brand_labels = brand_domain.split(".")
+            if len(brand_labels) != 2 or brand_labels[-1] != observed_suffix:
+                continue
+            brand_label = brand_labels[0]
+            if observed_label != brand_label and _edit_distance_at_most_one(observed_label, brand_label):
+                matched.append({
+                    "brand_domain": brand_domain,
+                    "match_type": "ONE_EDIT_DOMAIN_SIMILARITY",
+                    "observed_label": observed_label,
+                })
+    has_punycode = any(label.startswith("xn--") for label in labels)
+    return {
+        "status": "POTENTIAL_MATCH" if matched or has_punycode else "NO_MATCH_IN_REFERENCE_SET",
+        "matches": matched[:5],
+        "idn_punycode_present": has_punycode,
+        "unicode_hostname": unicode_host if has_punycode else None,
+        "reference_domains": list(_KNOWN_BRAND_DOMAINS),
+        "method": "STATIC_BRAND_LIST_AND_ONE_EDIT_HEURISTIC",
+        "disclaimer": "Similarity is a lead for manual review, not proof of impersonation or fraud.",
+    }
+
+
 def tool_domain_intelligence(domain_or_url: str) -> ToolExecutionResult:
     """Observe DNS, WHOIS, and TLS certificate metadata; never fetch page content."""
     name = "domain_intelligence"
@@ -693,7 +780,7 @@ def tool_domain_intelligence(domain_or_url: str) -> ToolExecutionResult:
                         "dns_status": "NOT_CHECKED", "whois_status": "NOT_CHECKED"},
                        "INVALID_OR_BLOCKED_DOMAIN", str(exc))
 
-    base = {"domain": domain, "requested_input": str(domain_or_url)[:300]}
+    base = {"domain": domain, "requested_input": str(domain_or_url)[:300], "lookalike_observation": _lookalike_domain_observation(domain)}
     try:
         ips = _resolve_domain(domain)
     except subprocess.TimeoutExpired:
