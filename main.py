@@ -26,6 +26,7 @@ Security notes:
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import logging
 from dotenv import load_dotenv
@@ -109,6 +110,13 @@ class InvestigationRequest(BaseModel):
         )
 
 
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Recover durable Watchtower event records when the API process starts."""
+    await resume_watchtower_jobs(_public_trace)
+    yield
+
+
 app = FastAPI(
     title="ScamAirbag API",
     description=(
@@ -116,6 +124,7 @@ app = FastAPI(
         "domain intelligence, and deterministic risk scoring."
     ),
     version=APP_VERSION,
+    lifespan=lifespan,
 )
 
 # Local development defaults. For deployment, set CORS_ORIGINS to a
@@ -220,10 +229,6 @@ def _public_trace(trace: InvestigationTrace) -> Dict[str, Any]:
 
 
 app.include_router(build_watchtower_router(_public_trace))
-
-@app.on_event("startup")
-async def recover_watchtower_jobs_on_startup() -> None:
-    await resume_watchtower_jobs(_public_trace)
 
 
 def _sse(event_name: str, payload: Dict[str, Any]) -> str:
