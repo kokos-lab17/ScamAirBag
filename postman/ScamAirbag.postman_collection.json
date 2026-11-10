@@ -1,8 +1,8 @@
 {
   "info": {
     "_postman_id": "70066385-8300-5058-9b1f-9bd975f4d6cb",
-    "name": "ScamAirbag \u2014 API & Regression Checks",
-    "description": "Postman test suite for ScamAirbag health, validated investigation, streaming SSE, and request validation. Uses PayPal Sandbox only. Never store API secrets in this collection.",
+    "name": "ScamAirbag — API & Regression Checks",
+    "description": "Postman checks for ScamAirbag liveness/readiness, authenticated investigations, streaming SSE, and request validation. Set serviceToken for production; never store API secrets in the collection.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -17,11 +17,15 @@
     {
       "key": "invalidIdentifierHint",
       "value": "NOT_A_REAL_HINT"
+    },
+    {
+      "key": "serviceToken",
+      "value": ""
     }
   ],
   "item": [
     {
-      "name": "01 \u2014 Health & readiness",
+      "name": "01 — Health & readiness",
       "item": [
         {
           "name": "Health",
@@ -44,11 +48,57 @@
             "header": [],
             "url": "{{baseUrl}}/health"
           }
+        },
+        {
+          "name": "Readiness",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Readiness reports ready or degraded', () => pm.expect(pm.response.code).to.be.oneOf([200,503]));",
+                  "const body = pm.response.json();",
+                  "pm.test('Readiness includes configuration checks', () => pm.expect(body.checks).to.be.an('object'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/ready"
+          }
+        },
+        {
+          "name": "Protected Watchtower event history",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Event history is authorized', () => pm.response.to.have.status(200));",
+                  "pm.test('Response includes event list', () => pm.expect(pm.response.json().events).to.be.an('array'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Watchtower-Token",
+                "value": "{{serviceToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/watchtower/events?limit=10"
+          }
         }
       ]
     },
     {
-      "name": "02 \u2014 Investigation endpoints",
+      "name": "02 — Investigation endpoints",
       "item": [
         {
           "name": "Investigate message (JSON)",
@@ -63,7 +113,7 @@
                   "const body = pm.response.json();",
                   "pm.test('Trace includes a status', () => pm.expect(body.status).to.be.a('string'));",
                   "pm.test('Trace includes scorecard when completed', () => { if (body.status === 'COMPLETED') pm.expect(body.final_scorecard).to.be.an('object'); });",
-                  "pm.test('Score is within 0\u2013100', () => { const score = body.final_scorecard?.risk_score; if (score !== undefined) pm.expect(score).to.be.within(0,100); });"
+                  "pm.test('Score is within 0–100', () => { const score = body.final_scorecard?.risk_score; if (score !== undefined) pm.expect(score).to.be.within(0,100); });"
                 ]
               }
             }
@@ -74,6 +124,10 @@
               {
                 "key": "Content-Type",
                 "value": "application/json"
+              },
+              {
+                "key": "X-Watchtower-Token",
+                "value": "{{serviceToken}}"
               }
             ],
             "body": {
@@ -105,6 +159,10 @@
               {
                 "key": "Content-Type",
                 "value": "application/json"
+              },
+              {
+                "key": "X-Watchtower-Token",
+                "value": "{{serviceToken}}"
               }
             ],
             "body": {
@@ -139,6 +197,10 @@
               {
                 "key": "Accept",
                 "value": "text/event-stream"
+              },
+              {
+                "key": "X-Watchtower-Token",
+                "value": "{{serviceToken}}"
               }
             ],
             "body": {
@@ -151,7 +213,7 @@
       ]
     },
     {
-      "name": "03 \u2014 Validation & safety",
+      "name": "03 — Validation & safety",
       "item": [
         {
           "name": "Reject invalid identifier hint",
@@ -173,6 +235,10 @@
               {
                 "key": "Content-Type",
                 "value": "application/json"
+              },
+              {
+                "key": "X-Watchtower-Token",
+                "value": "{{serviceToken}}"
               }
             ],
             "body": {
@@ -201,6 +267,10 @@
               {
                 "key": "Content-Type",
                 "value": "application/json"
+              },
+              {
+                "key": "X-Watchtower-Token",
+                "value": "{{serviceToken}}"
               }
             ],
             "body": {
