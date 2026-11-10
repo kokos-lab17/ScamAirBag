@@ -65,6 +65,8 @@ services:
         value: /var/data/watchtower.sqlite3
       - key: WATCHTOWER_MAX_CONCURRENT
         value: "2"
+      - key: WATCHTOWER_RETENTION_DAYS
+        value: "90"
       - key: WATCHTOWER_DEMO_ENABLED
         value: "false"
       - key: WATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE
