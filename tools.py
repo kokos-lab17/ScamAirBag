@@ -306,7 +306,7 @@ def _generate_with_model_fallback(client: Any, *, contents: Any, config: Any) ->
         except Exception as exc:
             last_error = exc
             status = _gemini_status_code(exc)
-            if index == len(models) - 1 or status not in {500, 502, 503, 504}:
+            if index == len(models) - 1 or status not in {429, 500, 502, 503, 504}:
                 raise
     if last_error:
         raise last_error
