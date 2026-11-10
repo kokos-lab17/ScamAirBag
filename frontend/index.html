@@ -348,7 +348,8 @@
         $("evidenceRootHash").textContent = currentEvidenceManifest?.root_sha256 || "No manifest returned.";
         const evidenceCount = currentEvidenceManifest?.evidence_records?.length || 0;
         const findingCount = currentEvidenceManifest?.findings?.length || 0;
-        $("evidenceCounts").textContent = `${evidenceCount} evidence record(s) · ${findingCount} finding(s) · version ${currentEvidenceManifest?.manifest_version || "—"}`;
+        const signatureLabel = currentEvidenceManifest?.signature ? "Server signature present" : "Unsigned manifest";
+        $("evidenceCounts").textContent = `${evidenceCount} evidence record(s) · ${findingCount} finding(s) · ${signatureLabel}`;
         $("evidenceIntegrityNote").textContent = currentEvidenceManifest?.integrity_note || "The API did not return an evidence integrity note.";
         $("verifyEvidenceButton").disabled = !currentEvidenceManifest;
         $("downloadEvidenceButton").disabled = !currentEvidenceManifest;
@@ -651,7 +652,9 @@
           const result = await response.json();
           if (!response.ok) throw new Error(result.detail || "Evidence verification request failed.");
           $("evidenceVerifyStatus").textContent = result.valid
-            ? `Integrity verified · ${result.verified_evidence_records} evidence record(s) · ${result.verified_findings} finding(s).`
+            ? result.signature_status === "VERIFIED"
+              ? `Server signature verified · ${result.verified_evidence_records} evidence record(s) · ${result.verified_findings} finding(s).`
+              : `Hashes are internally consistent, but the receipt is unsigned · ${result.verified_evidence_records} evidence record(s).`
             : `Integrity check failed · ${(result.errors || []).join(" ")}`;
           $("evidenceVerifyStatus").className = result.valid ? "status" : "status error";
         } catch (error) {
