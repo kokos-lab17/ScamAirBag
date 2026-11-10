@@ -630,7 +630,7 @@ def tool_link_redirect_inspection(url: str) -> ToolExecutionResult:
             host = (parsed.hostname or "").encode("idna").decode("ascii").lower().rstrip(".")
             if not host or host in visited:
                 return _result(name, "SUCCESS", EvidenceProvenance.OBSERVED_EXTERNAL, {
-                    "initial_host": initial_host, "final_host": host or final_host,
+                    "initial_url": url[:2048], "initial_host": initial_host, "final_host": host or final_host,
                     "redirect_hops": hops, "redirect_loop_detected": bool(host),
                     "redirect_limit_reached": False, "inspection_method": "HTTP_HEAD",
                 })
@@ -659,7 +659,7 @@ def tool_link_redirect_inspection(url: str) -> ToolExecutionResult:
         final_parsed = urlsplit(current)
         final_host = (final_parsed.hostname or final_host).lower()
         return _result(name, "SUCCESS", EvidenceProvenance.OBSERVED_EXTERNAL, {
-            "initial_host": initial_host, "final_host": final_host,
+            "initial_url": url[:2048], "initial_host": initial_host, "final_host": final_host,
             "redirect_hops": hops,
             "cross_domain_redirect": final_host != initial_host,
             "https_downgrade": parsed.scheme.lower() == "https" and final_parsed.scheme.lower() == "http",
