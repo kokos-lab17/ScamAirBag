@@ -224,6 +224,7 @@ The static site origin in `CORS_ORIGINS` must exactly match the deployed fronten
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | `/health` | Liveness check; does not reveal secret configuration |
+| GET | `/ready` | Configuration readiness checks; no provider API calls are made |
 | POST | `/api/v1/investigate` | Complete investigation response |
 | POST | `/api/v1/investigate/stream` | Progress events and final result using POST + SSE |
 | POST | `/api/v1/evidence/verify` | Verify evidence manifest hashes and root integrity |
