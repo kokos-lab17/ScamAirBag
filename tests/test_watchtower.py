@@ -9,6 +9,8 @@ def _client(monkeypatch, tmp_path):
     monkeypatch.setattr(watchtower, "_DB_PATH", str(tmp_path / "watchtower.sqlite3"))
     monkeypatch.setattr(watchtower, "_INGEST_TOKEN", "test-watchtower-token")
     monkeypatch.setattr(watchtower, "_schedule", lambda event_id, public_trace: None)
+    # The router creates its schema during import; initialize again after
+    # redirecting the database path so each test uses an isolated SQLite file.
     watchtower.init_watchtower()
     return TestClient(main.app)
 
