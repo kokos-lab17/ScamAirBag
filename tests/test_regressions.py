@@ -681,3 +681,34 @@ def test_coverage_does_not_treat_subscription_payer_as_seller_domain():
     )
     outcomes = build_source_outcomes(InvestigationInput(), None, [subscription])
     assert not any(item.source_name == "domain_dns:example.test" for item in outcomes)
+
+
+def test_watchtower_event_history_requires_access_token(tmp_path, monkeypatch):
+    import asyncio
+    import watchtower
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(watchtower, "_DB_PATH", str(tmp_path / "watchtower.sqlite3"))
+    monkeypatch.setattr(watchtower, "_INGEST_TOKEN", "private-token")
+    router = watchtower.build_watchtower_router(lambda trace: {})
+    endpoint = next(route.endpoint for route in router.routes
+                    if getattr(route, "path", "") == "/api/v1/watchtower/events")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(endpoint(limit=20, x_watchtower_token=None))
+    assert exc.value.status_code == 401
+
+
+def test_watchtower_demo_trigger_requires_access_token(tmp_path, monkeypatch):
+    import asyncio
+    import watchtower
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(watchtower, "_DB_PATH", str(tmp_path / "watchtower.sqlite3"))
+    monkeypatch.setattr(watchtower, "_INGEST_TOKEN", "private-token")
+    monkeypatch.setattr(watchtower, "_DEMO_ENABLED", True)
+    router = watchtower.build_watchtower_router(lambda trace: {})
+    endpoint = next(route.endpoint for route in router.routes
+                    if getattr(route, "path", "") == "/api/v1/watchtower/demo/simulate-invoice")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(endpoint(watchtower.DemoEventRequest(identifier="INV-1"), x_watchtower_token=None))
+    assert exc.value.status_code == 401
