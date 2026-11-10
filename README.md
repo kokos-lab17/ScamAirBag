@@ -125,7 +125,7 @@ Watchtower adds an event intake path that can wake the existing investigation ag
 
 **Supported paths:**
 
-- **Verified PayPal Invoicing webhooks:** `POST /api/v1/watchtower/paypal/webhook` verifies the incoming transmission with PayPal's `/v1/notifications/verify-webhook-signature` API before trusting the event. The initial pre-payment allowlist is `INVOICING.INVOICE.CREATED`, `INVOICING.INVOICE.SENT`, and `INVOICING.INVOICE.UPDATED`. A verified event automatically schedules a PayPal Sandbox invoice lookup and investigation.
+- **Verified PayPal Invoicing webhooks:** `POST /api/v1/watchtower/paypal/webhook` verifies the incoming transmission with PayPal's `/v1/notifications/verify-webhook-signature` API before trusting the event. The initial pre-payment allowlist includes invoice events `INVOICING.INVOICE.CREATED`, `INVOICING.INVOICE.SENT`, and `INVOICING.INVOICE.UPDATED`; order event `CHECKOUT.ORDER.APPROVED`; and subscription events `BILLING.SUBSCRIPTION.CREATED`, `BILLING.SUBSCRIPTION.ACTIVATED`, and `BILLING.SUBSCRIPTION.UPDATED`. A verified event automatically schedules the matching PayPal Sandbox invoice, order, or subscription lookup and investigation.
 - **Authenticated generic event intake:** `POST /api/v1/watchtower/events` requires the `X-Watchtower-Token` header matching `WATCHTOWER_INGEST_TOKEN`. This is a trusted integration endpoint, not proof that the sender is PayPal.
 - **Explicit demo simulator:** `POST /api/v1/watchtower/demo/simulate-invoice` is available only when `WATCHTOWER_DEMO_ENABLED=true`. The dashboard labels this as simulated. The investigation still attempts a real Sandbox invoice lookup; no invoice facts are fabricated.
 
@@ -133,9 +133,9 @@ Watchtower adds an event intake path that can wake the existing investigation ag
 
 1. Deploy the API over HTTPS and confirm `https://YOUR-API-HOST/api/v1/watchtower/status` responds.
 2. In the PayPal Developer Dashboard, open the Sandbox REST app used by ScamAirbag and add a webhook with this URL: `https://YOUR-API-HOST/api/v1/watchtower/paypal/webhook`.
-3. Subscribe to `INVOICING.INVOICE.CREATED`, `INVOICING.INVOICE.SENT`, and `INVOICING.INVOICE.UPDATED`.
+3. Subscribe to `INVOICING.INVOICE.CREATED`, `INVOICING.INVOICE.SENT`, `INVOICING.INVOICE.UPDATED`, `CHECKOUT.ORDER.APPROVED`, `BILLING.SUBSCRIPTION.CREATED`, `BILLING.SUBSCRIPTION.ACTIVATED`, and `BILLING.SUBSCRIPTION.UPDATED`.
 4. Copy the generated webhook ID into the API service environment as `PAYPAL_WEBHOOK_ID`. Keep the matching Sandbox `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` configured on that same service.
-5. Trigger a Sandbox invoice event and check Watchtower's event feed. Only events that pass PayPal's signature-verification API are recorded with source `VERIFIED_PAYPAL_WEBHOOK`.
+5. Trigger a Sandbox invoice event and check Watchtower's event feed. Only events that pass PayPal's signature-verification API are recorded with source `VERIFIED_PAYPAL_WEBHOOK`. The handler preserves the original webhook body bytes when constructing PayPal's verification request, as PayPal warns that parsing and reserializing the event can invalidate verification.
 
 Required/optional environment variables:
 
@@ -146,7 +146,7 @@ WATCHTOWER_INGEST_TOKEN=use-a-long-random-secret-for-your-own-integration
 WATCHTOWER_DB_PATH=/var/data/watchtower.sqlite3
 ```
 
-`WATCHTOWER_DB_PATH` must point to a mounted persistent disk path if event history must survive Render instance replacement/restarts. Without persistent storage, SQLite is only local/ephemeral history. The current background task runner is single-process and in-process: it is appropriate for a controlled hackathon prototype, not yet a production durable queue. A process restart can interrupt an active investigation; the next engineering phase is a durable worker/queue and deployment-aware recovery.
+`WATCHTOWER_DB_PATH` must point to a mounted persistent disk path if event history must survive Render instance replacement/restarts. Without persistent storage, SQLite is only local/ephemeral history. The current background task runner is single-process and in-process: it is appropriate for a controlled hackathon prototype, not yet a production durable queue. PayPal's Developer Dashboard webhook simulator does not support postback signature verification; use a real Sandbox app event for the verified-webhook path, or the clearly labelled Watchtower demo simulator to demonstrate automatic agent wake-up. A process restart can interrupt an active investigation; the next engineering phase is a durable worker/queue and deployment-aware recovery.
 
 ### Watchtower API
 
