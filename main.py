@@ -155,8 +155,8 @@ _allowed_origins = [
     if origin.strip()
 ]
 
-# Always permit common local development servers, even when .env contains
-# only the deployed frontend origin. These are loopback origins, not wildcards.
+# Loopback development origins are allowed only outside production.
+# Production trusts only the exact origins listed in CORS_ORIGINS.
 _local_dev_origins = [
     f"http://{host}:{port}"
     for host in ("localhost", "127.0.0.1")
