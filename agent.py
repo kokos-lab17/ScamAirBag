@@ -23,7 +23,9 @@ to stream safe progress events; do not expose model chain-of-thought.
 """
 
 from __future__ import annotations
+import logging
 
+logger = logging.getLogger(__name__)
 import json
 import os
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -651,6 +653,7 @@ def run_investigation(
             feedback = "Maximum model turns reached before a finish decision."
 
     except Exception as exc:
+        logger.exception("Agent runtime failure")
         trace.status = "FAILED"
         trace.error_code = "AGENT_RUNTIME_ERROR"
         _emit(
