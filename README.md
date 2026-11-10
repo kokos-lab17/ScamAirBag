@@ -159,7 +159,7 @@ WATCHTOWER_DB_PATH=/var/data/watchtower.sqlite3\nWATCHTOWER_SHARE_ANONYMIZED_INT
 | POST | `/api/v1/watchtower/events` | Shared-secret authenticated generic event intake |
 | POST | `/api/v1/watchtower/demo/simulate-invoice` | Explicitly simulated invoice event for demos |
 
-Watchtower does not claim to continuously poll a PayPal account. It reacts to webhooks after you register the HTTPS endpoint and configure the webhook ID. It does not automatically approve, decline, pay, cancel, or otherwise change transactions.
+Watchtower does not claim to continuously poll a PayPal account. It reacts to webhooks after you register the HTTPS endpoint and configure the webhook ID. PayPal delivers only events associated with the REST app to which that webhook is subscribed; this is not a universal feed of every activity in a person's PayPal account. It does not automatically approve, decline, pay, cancel, or otherwise change transactions.
 
 ## Optional Elastic historical intelligence
 
@@ -233,7 +233,7 @@ The API returns a public trace summary, not the raw submitted message or unfilte
 
 ```bash
 pytest -q
-python -m py_compile schemas.py tools.py elastic_intelligence.py scoring.py agent.py main.py render_dispatch.py render_workflow_tasks.py
+python -m py_compile schemas.py tools.py elastic_intelligence.py scoring.py agent.py watchtower.py main.py render_dispatch.py render_workflow_tasks.py
 ```
 
 The automated tests use mocks and do not require live Gemini, PayPal, Elastic, or Render credentials. Live integration tests must be run with your own Sandbox and service credentials.
