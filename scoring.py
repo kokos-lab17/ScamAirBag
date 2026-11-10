@@ -306,6 +306,15 @@ def build_source_outcomes(
             result.provenance if result else EvidenceProvenance.UNAVAILABLE,
             result.error_code if result else "PAYPAL_LOOKUP_NOT_ATTEMPTED",
         ))
+        if tool_name == "paypal_subscription" and result and result.status == "SUCCESS":
+            plan_status = result.data.get("plan_details_status")
+            plan_verified = plan_status == "VERIFIED"
+            outcomes.append(_source_outcome(
+                "paypal_subscription_plan", True,
+                "SUCCESS" if plan_verified else "FAILED",
+                EvidenceProvenance.VERIFIED_PAYPAL if plan_verified else EvidenceProvenance.UNAVAILABLE,
+                None if plan_verified else result.data.get("plan_error_code", "SUBSCRIPTION_PLAN_UNAVAILABLE"),
+            ))
     elif identifier:
         outcomes.append(_source_outcome(
             "paypal_identifier", True, "SKIPPED", EvidenceProvenance.UNAVAILABLE,
