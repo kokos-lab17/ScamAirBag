@@ -226,12 +226,14 @@ def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,
         "counts":counts,"last_event_at":latest["received_at"] if latest else None,
         "monitoring_claim":"Event listener is ready; it does not poll PayPal or receive PayPal webhooks until a verified external source is configured."}
     @router.get("/events")
-    async def events(limit:int=30):
+    async def events(limit:int=30, x_watchtower_token:Optional[str]=Header(default=None)):
+        _require_ingest_token(x_watchtower_token)
         limit=max(1,min(limit,100))
         with _db() as db: rows=db.execute("SELECT * FROM watchtower_events ORDER BY received_at DESC LIMIT ?",(limit,)).fetchall()
         return {"events":[_row(r) for r in rows]}
     @router.get("/events/{event_id}")
-    async def event_detail(event_id:str):
+    async def event_detail(event_id:str, x_watchtower_token:Optional[str]=Header(default=None)):
+        _require_ingest_token(x_watchtower_token)
         with _db() as db: r=db.execute("SELECT * FROM watchtower_events WHERE event_id=?",(event_id,)).fetchone()
         if r is None: raise HTTPException(status_code=404,detail="Watchtower event not found.")
         return _row(r)
@@ -282,7 +284,8 @@ def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,
         return {"accepted": True, "duplicate": duplicate, "event": record}
 
     @router.post("/demo/simulate-invoice",status_code=202)
-    async def simulate(payload:DemoEventRequest):
+    async def simulate(payload:DemoEventRequest, x_watchtower_token:Optional[str]=Header(default=None)):
+        _require_ingest_token(x_watchtower_token)
         if not _DEMO_ENABLED: raise HTTPException(status_code=404,detail="Watchtower demo simulation is disabled.")
         event_id="demo-"+uuid.uuid4().hex
         record, _duplicate = _create_event(event_id,"SANDBOX_SIMULATED","PAYPAL_SANDBOX_INVOICE_EVENT_SIMULATED",payload.identifier,"INVOICE")
