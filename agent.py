@@ -349,6 +349,18 @@ def _tool_evidence_for_model(result: ToolExecutionResult) -> Dict[str, Any]:
             "domain", "record_found", "source", "reputation",
             "last_analysis_stats", "last_analysis_date", "analysis_engines_reporting", "categories"
         )}
+    elif result.tool_name == "link_redirect_inspection":
+        safe = {key: data.get(key) for key in (
+            "initial_host", "final_host", "redirect_hops", "cross_domain_redirect",
+            "https_downgrade", "redirect_loop_detected", "redirect_limit_reached",
+            "blocked_unsafe_destination", "inspection_method"
+        )}
+    elif result.tool_name == "email_authentication_headers":
+        safe = {key: data.get(key) for key in (
+            "header_parse_status", "authentication_results", "received_spf_results",
+            "from_domain", "return_path_domain", "dkim_signing_domains",
+            "alignment_observations", "limitations"
+        )}
     elif result.tool_name == "extract_message_context":
         safe = {"entities": data.get("entities")}
     else:
@@ -387,6 +399,13 @@ def _safe_event_summary(result: ToolExecutionResult) -> Dict[str, Any]:
         summary = {key: data.get(key) for key in ("invoice_id", "status", "currency_code", "amount")}
     elif result.tool_name == "paypal_order":
         summary = {key: data.get(key) for key in ("order_id", "status", "intent")}
+    elif result.tool_name == "paypal_subscription":
+        summary = {key: data.get(key) for key in ("subscription_id", "status", "plan_id", "next_billing_time")}
+    elif result.tool_name == "link_redirect_inspection":
+        summary = {key: data.get(key) for key in (
+            "initial_host", "final_host", "cross_domain_redirect", "https_downgrade",
+            "blocked_unsafe_destination", "redirect_limit_reached"
+        )}
     else:
         summary = {"result_available": result.status == "SUCCESS"}
     return summary
