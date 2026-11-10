@@ -38,7 +38,7 @@ from typing import Any, Dict, Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agent import run_investigation
 from schemas import InvestigationInput, InvestigationTrace
@@ -51,15 +51,19 @@ APP_VERSION = "0.1.0"
 MAX_USER_TEXT_CHARS = int(os.getenv("MAX_USER_TEXT_CHARS", "12000"))
 APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 MAX_IDENTIFIER_CHARS = 200
+MAX_CONCURRENT_INVESTIGATIONS = max(1, min(8, int(os.getenv("MAX_CONCURRENT_INVESTIGATIONS", "3"))))
+_investigation_semaphore = asyncio.Semaphore(MAX_CONCURRENT_INVESTIGATIONS)
 ALLOWED_IDENTIFIER_HINTS = {"UNKNOWN", "INVOICE", "ORDER", "SUBSCRIPTION"}
 
 
 class EvidenceManifestVerificationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     manifest: Dict[str, Any]
 
 
 class InvestigationRequest(BaseModel):
     """Validated public API request; maps to the shared internal input schema."""
+    model_config = ConfigDict(extra="forbid")
 
     user_text: Optional[str] = Field(
         default=None,
@@ -296,9 +300,10 @@ async def investigate(payload: InvestigationRequest) -> JSONResponse:
     """
     investigation_input = payload.to_investigation_input()
     try:
-        trace: InvestigationTrace = await asyncio.to_thread(
-            run_investigation, investigation_input
-        )
+        async with _investigation_semaphore:
+            trace: InvestigationTrace = await asyncio.to_thread(
+                run_investigation, investigation_input
+            )
         public_result = _public_trace(trace)
         return JSONResponse(
             content=public_result,
@@ -352,7 +357,11 @@ async def investigate_stream(
             raise
 
     async def event_generator():
-        worker = asyncio.create_task(asyncio.to_thread(run_and_publish))
+        async def bounded_worker():
+            async with _investigation_semaphore:
+                return await asyncio.to_thread(run_and_publish)
+
+        worker = asyncio.create_task(bounded_worker())
         try:
             yield ": scamairbag investigation stream\n\n"
 
