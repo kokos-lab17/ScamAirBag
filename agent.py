@@ -46,7 +46,7 @@ from schemas import (
 )
 from scoring import score_investigation
 from evidence_utils import explicit_message_identifier
-from tools import run_tool
+from tools import run_tool, _extract_link_evidence
 from elastic_intelligence import elastic_is_configured, store_opt_in_case
 from threat_intelligence import virustotal_is_configured
 
@@ -489,6 +489,39 @@ def _required_checks_remaining(
     return remaining
 
 
+def _tool_target_is_grounded(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    input_context: InvestigationInput,
+    results: Sequence[ToolExecutionResult],
+) -> bool:
+    """Restrict outbound inspection to exact user-supplied links or PayPal-verified seller domains."""
+    deterministic = _extract_link_evidence(input_context.user_text or "")
+    if tool_name == "extract_message_context":
+        return arguments.get("user_text") == input_context.user_text
+    if tool_name == "link_redirect_inspection":
+        return arguments.get("url") in deterministic["detected_urls"]
+    if tool_name in {"domain_intelligence", "historical_pattern_search", "threat_intelligence"}:
+        candidate = _domain_input_key(str(arguments.get("domain_or_url") or ""))
+        allowed = {_domain_input_key(item) for item in deterministic["detected_domains"]}
+        for result in results:
+            if result.status != "SUCCESS":
+                continue
+            emails = []
+            if result.tool_name == "paypal_invoice":
+                emails.append(result.data.get("seller_email"))
+            elif result.tool_name == "paypal_order":
+                emails.extend(
+                    unit.get("payee_email") for unit in result.data.get("purchase_units", [])
+                    if isinstance(unit, dict)
+                )
+            for email in emails:
+                if isinstance(email, str) and "@" in email:
+                    allowed.add(_domain_input_key(email.rsplit("@", 1)[-1]))
+        return bool(candidate) and candidate in allowed
+    return True
+
+
 def _build_prompt(
     input_context: InvestigationInput,
     results: Sequence[ToolExecutionResult],
@@ -802,6 +835,16 @@ def run_investigation(
                     break
 
             if decision.action == "CALL_TOOL":
+                if not _tool_target_is_grounded(
+                    decision.selected_tool, decision.arguments, input_context, results
+                ):
+                    contents.append(_function_response(types, {
+                        "accepted": False,
+                        "error": "Target rejected: outbound checks are restricted to exact links/domains in the submitted message or domains returned by a verified PayPal seller/payee record.",
+                    }, call.id))
+                    feedback = "Do not invent or substitute external targets. Use only exact targets grounded in the submitted message or verified PayPal seller/payee evidence."
+                    continue
+
                 # A model decision cannot turn an arbitrary message fragment into
                 # a PayPal transaction ID. Explicit UI-supplied IDs are accepted;
                 # message-derived IDs must appear after a matching type label.
