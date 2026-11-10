@@ -1280,3 +1280,40 @@ def test_production_cors_preflight_is_not_blocked_by_service_token_middleware(mo
     )
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "https://scamairbag-web-sqh8.onrender.com"
+
+
+def test_evidence_manifest_never_exports_full_url_paths_or_query_tokens():
+    from evidence_manifest import build_evidence_manifest
+
+    trace = InvestigationTrace(
+        input_context=InvestigationInput(user_text="Please inspect this link"),
+        steps=[InvestigationStep(
+            step_number=1,
+            decision=AgentDecision(action="CALL_TOOL", selected_tool="extract_message_context",
+                                   rationale="Extract links", arguments={"user_text": "Please inspect this link"}),
+            result=ToolExecutionResult(
+                tool_name="extract_message_context", status="SUCCESS",
+                provenance=EvidenceProvenance.AI_INFERRED,
+                data={"entities": {
+                    "detected_urls": ["https://example.com/private/path?token=do-not-export"],
+                    "detected_domains": ["example.com"],
+                    "claimed_amount": None,
+                }},
+            ),
+        )],
+    )
+    manifest = build_evidence_manifest(trace)
+    serialized = str(manifest)
+    assert "do-not-export" not in serialized
+    assert "/private/path" not in serialized
+    assert "example.com" in serialized
+
+
+def test_investigation_request_rejects_unexpected_fields():
+    from fastapi.testclient import TestClient
+
+    response = TestClient(main.app).post(
+        "/api/v1/investigate",
+        json={"user_text": "check this", "unrecognized_extra": "unexpected"},
+    )
+    assert response.status_code == 422
