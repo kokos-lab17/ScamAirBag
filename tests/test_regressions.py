@@ -759,3 +759,153 @@ def test_raw_email_headers_are_not_included_in_model_context():
     assert "private-sender@example.com" not in str(model_context)
     assert "private-auth-value" not in str(model_context)
     assert "PARSED LOCALLY" in model_context["email_headers"]
+
+
+def test_evidence_manifest_hashes_and_detects_tampering():
+    from evidence_manifest import build_evidence_manifest, verify_evidence_manifest
+
+    trace = InvestigationTrace(
+        input_context=InvestigationInput(user_text="Invoice INV-123"),
+        steps=[InvestigationStep(
+            step_number=1,
+            decision=AgentDecision(action="CALL_TOOL", selected_tool="paypal_invoice",
+                                   rationale="Verify invoice", arguments={"invoice_id": "INV-123"}),
+            result=ToolExecutionResult(
+                tool_name="paypal_invoice", status="SUCCESS",
+                provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+                data={"invoice_id": "INV-123", "status": "SENT",
+                      "seller_email": "seller@example.com",
+                      "private_memo": "MUST NOT BE IN MANIFEST",
+                      "amount": {"value": "100.00", "currency_code": "USD"}},
+            ),
+        )],
+    )
+    manifest = build_evidence_manifest(trace)
+    assert verify_evidence_manifest(manifest)["valid"] is True
+    assert "MUST NOT BE IN MANIFEST" not in str(manifest)
+    manifest["evidence_records"][0]["evidence"]["status"] = "PAID"
+    verified = verify_evidence_manifest(manifest)
+    assert verified["valid"] is False
+    assert any("hash mismatch" in error for error in verified["errors"])
+
+
+def test_evidence_manifest_is_in_public_investigation_response():
+    trace = InvestigationTrace(input_context=InvestigationInput(user_text="Check this invoice"))
+    public = main._public_trace(trace)
+    assert public["evidence_manifest"]["manifest_version"] == "1.0"
+    assert len(public["evidence_manifest"]["root_sha256"]) == 64
+    assert "not a digital signature" in public["evidence_manifest"]["integrity_note"]
+
+
+def test_evidence_manifest_verification_endpoint_accepts_valid_manifest():
+    from fastapi.testclient import TestClient
+    from evidence_manifest import build_evidence_manifest
+
+    manifest = build_evidence_manifest(
+        InvestigationTrace(input_context=InvestigationInput(user_text="test"))
+    )
+    response = TestClient(main.app).post("/api/v1/evidence/verify", json={"manifest": manifest})
+    assert response.status_code == 200
+    assert response.json()["valid"] is True
+
+
+def test_claimed_amount_mismatch_against_verified_invoice_is_scored():
+    from scoring import score_investigation
+
+    entities = ExtractedEntities(
+        claimed_amount="125.00", claimed_currency_code="USD",
+        claimed_amount_quote="Pay USD 125.00 today",
+    )
+    invoice = ToolExecutionResult(
+        tool_name="paypal_invoice", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"amount": {"value": "100.00", "currency_code": "USD"}},
+    )
+    scorecard, _ = score_investigation(
+        InvestigationInput(user_text="Please Pay USD 125.00 today"),
+        entities, [invoice],
+    )
+    mismatch = next(item for item in scorecard.findings if item.rule_id == "PAYMENT_AMOUNT_MISMATCH")
+    assert mismatch.risk_impact == 40
+    assert mismatch.provenance == EvidenceProvenance.VERIFIED_PAYPAL
+
+
+def test_claimed_amount_is_not_compared_without_exact_supporting_quote():
+    from scoring import score_investigation
+
+    entities = ExtractedEntities(
+        claimed_amount="125.00", claimed_currency_code="USD",
+        claimed_amount_quote="Pay USD 125.00 today",
+    )
+    invoice = ToolExecutionResult(
+        tool_name="paypal_invoice", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"amount": {"value": "100.00", "currency_code": "USD"}},
+    )
+    scorecard, _ = score_investigation(
+        InvestigationInput(user_text="Pay USD 999.00 today"),
+        entities, [invoice],
+    )
+    assert not any(item.rule_id == "PAYMENT_AMOUNT_MISMATCH" for item in scorecard.findings)
+    assert any("verbatim supporting quote" in item for item in scorecard.unverified_claims)
+
+
+def test_claimed_amount_currency_must_match_before_comparison():
+    from scoring import _compare_claimed_amount
+
+    entities = ExtractedEntities(
+        claimed_amount="100", claimed_currency_code="EUR",
+        claimed_amount_quote="Pay EUR 100",
+    )
+    invoice = ToolExecutionResult(
+        tool_name="paypal_invoice", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"amount": {"value": "100.00", "currency_code": "USD"}},
+    )
+    match, reason = _compare_claimed_amount(entities, [invoice], "Pay EUR 100")
+    assert match is None
+    assert "No verified PayPal invoice/order amount in EUR" in reason
+
+
+def test_lookalike_domain_generates_explainable_caution_finding():
+    from scoring import _build_findings
+
+    result = ToolExecutionResult(
+        tool_name="domain_intelligence", status="SUCCESS",
+        provenance=EvidenceProvenance.OBSERVED_EXTERNAL,
+        data={"domain": "paypa1.com", "lookalike_observation": tools._lookalike_domain_observation("paypa1.com")},
+    )
+    findings, _ = _build_findings(None, [result])
+    finding = next(item for item in findings if item.rule_id == "POTENTIAL_BRAND_LOOKALIKE")
+    assert finding.risk_impact == 20
+    assert "not proof" in finding.description
+
+
+def test_https_downgrade_and_cross_domain_redirect_are_scored_separately():
+    from scoring import _build_findings
+
+    result = ToolExecutionResult(
+        tool_name="link_redirect_inspection", status="SUCCESS",
+        provenance=EvidenceProvenance.OBSERVED_EXTERNAL,
+        data={"initial_host": "short.example", "final_host": "destination.example",
+              "cross_domain_redirect": True, "https_downgrade": True,
+              "redirect_hops": [{"host": "short.example", "status_code": 302}]},
+    )
+    findings, _ = _build_findings(None, [result])
+    rules = {item.rule_id for item in findings}
+    assert "HTTPS_TO_HTTP_DOWNGRADE" in rules
+    assert "CROSS_DOMAIN_REDIRECT" in rules
+
+
+def test_pasted_email_authentication_failure_is_not_misrepresented_as_verified():
+    from scoring import _build_findings
+
+    result = ToolExecutionResult(
+        tool_name="email_authentication_headers", status="SUCCESS",
+        provenance=EvidenceProvenance.USER_PROVIDED,
+        data={"authentication_results": [{"methods": [{"method": "dmarc", "result": "fail"}]}]},
+    )
+    findings, _ = _build_findings(None, [result])
+    finding = next(item for item in findings if item.rule_id == "EMAIL_AUTHENTICATION_FAILURE_CLAIM")
+    assert finding.provenance == EvidenceProvenance.USER_PROVIDED
+    assert finding.risk_impact == 10
