@@ -7,6 +7,7 @@ cryptographically sign PayPal or third-party source responses.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List
@@ -86,7 +87,7 @@ def _public_evidence(tool_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
     return {key: data[key] for key in keys if key in data and data[key] is not None}
 
 
-def build_evidence_manifest(trace: InvestigationTrace) -> Dict[str, Any]:
+def build_evidence_manifest(trace: InvestigationTrace, signing_key: str | None = None) -> Dict[str, Any]:
     """Build a deterministic-content manifest with a fresh creation timestamp."""
     records: List[Dict[str, Any]] = []
     for index, step in enumerate(trace.steps, start=1):
@@ -120,9 +121,10 @@ def build_evidence_manifest(trace: InvestigationTrace) -> Dict[str, Any]:
 
     created_at = datetime.now(timezone.utc).isoformat()
     integrity_note = (
-        "SHA-256 hashes let you detect changes to the evidence and findings in this report. "
-        "They are not a digital signature from PayPal or the external sources; provenance "
-        "labels describe how ScamAirbag obtained each observation."
+        "SHA-256 hashes cover the evidence records, findings, and manifest metadata. "
+        "When a signing key is configured, the ScamAirbag API also adds an HMAC-SHA256 "
+        "server signature so later edits can be detected. This is not a digital signature "
+        "from PayPal or external sources; provenance labels describe how ScamAirbag obtained each observation."
     )
     root_payload = {
         "manifest_version": "1.0",
@@ -132,18 +134,27 @@ def build_evidence_manifest(trace: InvestigationTrace) -> Dict[str, Any]:
         "evidence_records": [item["sha256"] for item in records],
         "findings": [item["sha256"] for item in findings],
     }
+    root_sha256 = sha256_json(root_payload)
+    signature = None
+    if signing_key:
+        signature = {
+            "algorithm": "HMAC-SHA256",
+            "signer": "ScamAirbag API",
+            "value": hmac.new(signing_key.encode("utf-8"), root_sha256.encode("ascii"), hashlib.sha256).hexdigest(),
+        }
     return {
         "manifest_version": "1.0",
         "created_at": created_at,
         "investigation_status": trace.status,
         "evidence_records": records,
         "findings": findings,
-        "root_sha256": sha256_json(root_payload),
+        "root_sha256": root_sha256,
+        "signature": signature,
         "integrity_note": integrity_note,
     }
 
 
-def verify_evidence_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
+def verify_evidence_manifest(manifest: Dict[str, Any], signing_key: str | None = None) -> Dict[str, Any]:
     """Verify all record hashes and the manifest root without trusting supplied hashes."""
     errors: List[str] = []
     records = manifest.get("evidence_records")
@@ -181,7 +192,31 @@ def verify_evidence_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
         "evidence_records": record_hashes,
         "findings": finding_hashes,
     }
-    if sha256_json(root_payload) != manifest.get("root_sha256"):
+    calculated_root = sha256_json(root_payload)
+    if calculated_root != manifest.get("root_sha256"):
         errors.append("Manifest root hash mismatch.")
-    return {"valid": not errors, "errors": errors, "verified_evidence_records": len(record_hashes),
+
+    signature = manifest.get("signature")
+    signature_status = "UNSIGNED"
+    if signature:
+        if not isinstance(signature, dict) or signature.get("algorithm") != "HMAC-SHA256":
+            signature_status = "INVALID_FORMAT"
+            errors.append("Manifest signature format is unsupported.")
+        elif not signing_key:
+            signature_status = "UNVERIFIABLE"
+            errors.append("Manifest is signed, but no verification key is configured.")
+        else:
+            expected_signature = hmac.new(
+                signing_key.encode("utf-8"),
+                str(manifest.get("root_sha256", "")).encode("ascii"),
+                hashlib.sha256,
+            ).hexdigest()
+            supplied_signature = str(signature.get("value") or "")
+            if hmac.compare_digest(expected_signature, supplied_signature):
+                signature_status = "VERIFIED"
+            else:
+                signature_status = "INVALID"
+                errors.append("Manifest server signature mismatch.")
+    return {"valid": not errors, "signature_status": signature_status, "errors": errors,
+            "verified_evidence_records": len(record_hashes),
             "verified_findings": len(finding_hashes), "root_sha256": manifest.get("root_sha256")}
