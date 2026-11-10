@@ -49,7 +49,7 @@ from evidence_manifest import build_evidence_manifest, verify_evidence_manifest
 
 logger = logging.getLogger("scamairbag.api")
 
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
 MAX_USER_TEXT_CHARS = int(os.getenv("MAX_USER_TEXT_CHARS", "12000"))
 APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 MAX_IDENTIFIER_CHARS = 200
