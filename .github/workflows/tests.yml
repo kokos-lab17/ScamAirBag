@@ -8,6 +8,7 @@ on:
       - production-hardening
   pull_request:
     branches:
+      - assistant/fix-local-api-routing
       - feature/investigation-refinement
       - production-hardening
 
