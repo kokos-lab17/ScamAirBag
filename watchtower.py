@@ -45,6 +45,33 @@ def init_watchtower():
         received_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT,
         completed_at TEXT, result_json TEXT, error_code TEXT)""")
         db.execute("CREATE INDEX IF NOT EXISTS idx_watchtower_received ON watchtower_events(received_at DESC)")
+        db.execute("CREATE TABLE IF NOT EXISTS watchtower_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL)")
+
+def _get_setting(key: str) -> Optional[str]:
+    with _db() as db:
+        row = db.execute("SELECT setting_value FROM watchtower_settings WHERE setting_key=?", (key,)).fetchone()
+    return row["setting_value"] if row else None
+
+
+def _set_setting(key: str, value: str) -> None:
+    with _db() as db:
+        db.execute(
+            "INSERT INTO watchtower_settings(setting_key,setting_value) VALUES(?,?) "
+            "ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value",
+            (key, value),
+        )
+
+
+PAYPAL_EVENT_HINTS = {
+    "INVOICING.INVOICE.CREATED": "INVOICE",
+    "INVOICING.INVOICE.SENT": "INVOICE",
+    "INVOICING.INVOICE.UPDATED": "INVOICE",
+    "CHECKOUT.ORDER.APPROVED": "ORDER",
+    "BILLING.SUBSCRIPTION.CREATED": "SUBSCRIPTION",
+    "BILLING.SUBSCRIPTION.ACTIVATED": "SUBSCRIPTION",
+    "BILLING.SUBSCRIPTION.UPDATED": "SUBSCRIPTION",
+}
+
 
 def _row(r):
     return {"event_id":r["event_id"],"source":r["source"],"event_type":r["event_type"],
@@ -169,7 +196,7 @@ def _schedule(event_id,public_trace):
 
 
 def _verify_paypal_signature(headers: Dict[str, str], event: Dict[str, Any], raw_body: bytes) -> bool:
-    webhook_id = os.getenv("PAYPAL_WEBHOOK_ID", "").strip()
+    webhook_id = (_get_setting("PAYPAL_WEBHOOK_ID") or os.getenv("PAYPAL_WEBHOOK_ID", "")).strip()
     if not webhook_id:
         return False
     required = {
@@ -221,7 +248,7 @@ def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,
             counts={r["status"]:r["count"] for r in db.execute("SELECT status,COUNT(*) AS count FROM watchtower_events GROUP BY status")}
             latest=db.execute("SELECT received_at FROM watchtower_events ORDER BY received_at DESC LIMIT 1").fetchone()
         return {"service":"watchtower","state":"READY","demo_enabled":_DEMO_ENABLED,
-        "authenticated_ingest_configured":bool(_INGEST_TOKEN),"historical_case_storage_opt_in":os.getenv("WATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE","false").lower() in {"1","true","yes"},"paypal_webhook_configured":bool(os.getenv("PAYPAL_WEBHOOK_ID") and os.getenv("PAYPAL_CLIENT_ID") and os.getenv("PAYPAL_CLIENT_SECRET")),"paypal_webhook_path":"/api/v1/watchtower/paypal/webhook","accepted_paypal_event_types":["INVOICING.INVOICE.CREATED","INVOICING.INVOICE.SENT","INVOICING.INVOICE.UPDATED","CHECKOUT.ORDER.APPROVED","BILLING.SUBSCRIPTION.CREATED","BILLING.SUBSCRIPTION.ACTIVATED","BILLING.SUBSCRIPTION.UPDATED"],"storage":"sqlite",
+        "authenticated_ingest_configured":bool(_INGEST_TOKEN),"historical_case_storage_opt_in":os.getenv("WATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE","false").lower() in {"1","true","yes"},"paypal_webhook_configured":bool((_get_setting("PAYPAL_WEBHOOK_ID") or os.getenv("PAYPAL_WEBHOOK_ID")) and os.getenv("PAYPAL_CLIENT_ID") and os.getenv("PAYPAL_CLIENT_SECRET")),"paypal_webhook_path":"/api/v1/watchtower/paypal/webhook","accepted_paypal_event_types":list(PAYPAL_EVENT_HINTS.keys()),"public_api_url_configured":bool(os.getenv("WATCHTOWER_PUBLIC_API_URL")),"storage":"sqlite",
         "storage_note":"History survives restarts only when the host has persistent disk storage.",
         "counts":counts,"last_event_at":latest["received_at"] if latest else None,
         "monitoring_claim":"Event listener is ready; it does not poll PayPal or receive PayPal webhooks until a verified external source is configured."}
@@ -245,6 +272,40 @@ def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,
             _schedule(record["event_id"],public_trace)
         return {"accepted":True,"duplicate":duplicate,"event":record}
 
+    @router.post("/paypal/register", status_code=201)
+    async def register_paypal_webhook(x_watchtower_token:Optional[str]=Header(default=None)):
+        _require_ingest_token(x_watchtower_token)
+        existing = _get_setting("PAYPAL_WEBHOOK_ID") or os.getenv("PAYPAL_WEBHOOK_ID")
+        if existing:
+            return {"registered": True, "already_registered": True, "webhook_id": existing,
+                    "webhook_url": os.getenv("WATCHTOWER_PUBLIC_API_URL", "").rstrip("/") + "/api/v1/watchtower/paypal/webhook",
+                    "event_types": list(PAYPAL_EVENT_HINTS.keys())}
+        public_url = os.getenv("WATCHTOWER_PUBLIC_API_URL", "").strip().rstrip("/")
+        if not public_url.startswith("https://"):
+            raise HTTPException(status_code=400, detail="Set WATCHTOWER_PUBLIC_API_URL to the public HTTPS API origin before registering.")
+        webhook_url = public_url + "/api/v1/watchtower/paypal/webhook"
+        payload = {"url": webhook_url, "event_types": [{"name": name} for name in PAYPAL_EVENT_HINTS]}
+        try:
+            def create_webhook():
+                token = _get_paypal_access_token()
+                response = requests.post(
+                    f"{PAYPAL_BASE_URL}/v1/notifications/webhooks",
+                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                    json=payload, timeout=PAYPAL_TIMEOUT_SECONDS,
+                )
+                response.raise_for_status()
+                return response.json()
+            result = await asyncio.to_thread(create_webhook)
+        except Exception:
+            raise HTTPException(status_code=502, detail="PayPal webhook registration failed. Check Sandbox credentials and webhook API permissions.")
+        webhook_id = result.get("id")
+        if not isinstance(webhook_id, str) or not webhook_id:
+            raise HTTPException(status_code=502, detail="PayPal did not return a webhook ID.")
+        _set_setting("PAYPAL_WEBHOOK_ID", webhook_id)
+        return {"registered": True, "already_registered": False, "webhook_id": webhook_id,
+                "webhook_url": webhook_url, "event_types": list(PAYPAL_EVENT_HINTS.keys()),
+                "note": "The webhook ID is stored in Watchtower SQLite. Set PAYPAL_WEBHOOK_ID in the service environment as a durable backup if the host does not use persistent storage."}
+
     @router.post("/paypal/webhook", status_code=202)
     async def paypal_webhook(request: Request):
         raw_body = await request.body()
@@ -262,15 +323,7 @@ def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,
         if not verified:
             raise HTTPException(status_code=401, detail="PayPal webhook signature could not be verified.")
         event_type = str(event.get("event_type") or "")
-        event_hints = {
-            "INVOICING.INVOICE.CREATED": "INVOICE",
-            "INVOICING.INVOICE.SENT": "INVOICE",
-            "INVOICING.INVOICE.UPDATED": "INVOICE",
-            "CHECKOUT.ORDER.APPROVED": "ORDER",
-            "BILLING.SUBSCRIPTION.CREATED": "SUBSCRIPTION",
-            "BILLING.SUBSCRIPTION.ACTIVATED": "SUBSCRIPTION",
-            "BILLING.SUBSCRIPTION.UPDATED": "SUBSCRIPTION",
-        }
+        event_hints = PAYPAL_EVENT_HINTS
         identifier_hint = event_hints.get(event_type)
         if identifier_hint is None:
             return {"accepted": True, "ignored": True, "reason": "Event type is outside the configured pre-payment monitoring allowlist."}
