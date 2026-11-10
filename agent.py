@@ -436,20 +436,43 @@ def _required_checks_remaining(
                 remaining.append(("link_redirect_inspection", {"url": url},
                                   "The submitted URL redirect chain has not been inspected."))
                 break
-        for domain in list(dict.fromkeys(extracted.detected_domains)):
-            key = _domain_input_key(str(domain))
-            if ("domain_intelligence", key) not in attempted_domain_inputs:
-                remaining.append(("domain_intelligence", {"domain_or_url": domain},
-                                  "DNS and WHOIS evidence has not been checked for this domain."))
-                break
-            if virustotal_is_configured() and ("threat_intelligence", key) not in attempted_domain_inputs:
-                remaining.append(("threat_intelligence", {"domain_or_url": domain},
-                                  "External reputation evidence has not been checked for this domain."))
-                break
-            if elastic_is_configured() and ("historical_pattern_search", key) not in attempted_domain_inputs:
-                remaining.append(("historical_pattern_search", {"domain_or_url": domain},
-                                  "Historical pattern intelligence has not been checked for this domain."))
-                break
+
+    # PayPal's verified seller/payee email fields are useful independent
+    # evidence even when Watchtower starts from a webhook ID without a message.
+    observed_domains = list(extracted.detected_domains) if extracted else []
+    for item in results:
+        if item.status != "SUCCESS":
+            continue
+        emails = []
+        if item.tool_name == "paypal_invoice":
+            seller_email = item.data.get("seller_email")
+            if isinstance(seller_email, str):
+                emails.append(seller_email)
+        elif item.tool_name == "paypal_order":
+            for unit in item.data.get("purchase_units") or []:
+                if isinstance(unit, dict) and isinstance(unit.get("payee_email"), str):
+                    emails.append(unit["payee_email"])
+        # Subscription subscriber_email is the payer, not the merchant/seller.
+        for email in emails:
+            domain = email.rsplit("@", 1)[-1].strip().lower().rstrip(".")
+            if "@" in email and "." in domain and re.fullmatch(r"[a-z0-9.-]+", domain):
+                if domain not in observed_domains:
+                    observed_domains.append(domain)
+
+    for domain in observed_domains:
+        key = _domain_input_key(str(domain))
+        if ("domain_intelligence", key) not in attempted_domain_inputs:
+            remaining.append(("domain_intelligence", {"domain_or_url": domain},
+                              "The verified PayPal seller/payee email domain has not been checked."))
+            break
+        if virustotal_is_configured() and ("threat_intelligence", key) not in attempted_domain_inputs:
+            remaining.append(("threat_intelligence", {"domain_or_url": domain},
+                              "External reputation evidence has not been checked for this seller/payee domain."))
+            break
+        if elastic_is_configured() and ("historical_pattern_search", key) not in attempted_domain_inputs:
+            remaining.append(("historical_pattern_search", {"domain_or_url": domain},
+                              "Historical pattern intelligence has not been checked for this seller/payee domain."))
+            break
     return remaining
 
 
