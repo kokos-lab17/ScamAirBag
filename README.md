@@ -159,7 +159,7 @@ Render Workflows retains task arguments and results according to Render's servic
 
 ## Deploy to Render
 
-A starter `render.yaml` defines the FastAPI service and static frontend. Review and set all secret environment variables in the Render Dashboard before deployment. The frontend defaults to `https://scamairbag-api.onrender.com` when hosted on Render; update that URL if your service name differs.
+A starter `render.yaml` defines the FastAPI service and static frontend. Review and set all secret environment variables in the Render Dashboard before deployment. The frontend defaults to `https://scamairbag.onrender.com` when hosted on Render; update that URL if your service name differs.
 
 The static site origin in `CORS_ORIGINS` must exactly match the deployed frontend origin. Do not use wildcard CORS for a credential-bearing backend.
 

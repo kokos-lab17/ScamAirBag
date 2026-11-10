@@ -169,8 +169,11 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
-    const defaultApiBase = location.hostname.endsWith("onrender.com")
-      ? "https://scamairbag-api.onrender.com" : "http://localhost:8000";
+
+const defaultApiBase = location.hostname.endsWith("onrender.com")
+  ? "https://scamairbag.onrender.com"
+  : "http://localhost:8000";
+
     $("apiBase").value = defaultApiBase;
     const form = $("investigationForm");
     const button = $("submitButton");
