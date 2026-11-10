@@ -1262,3 +1262,21 @@ def test_agent_stops_cleanly_when_client_disconnects_before_work_starts(monkeypa
     assert trace.error_code == "CLIENT_DISCONNECTED"
     assert trace.steps == []
     assert trace.final_scorecard is not None
+
+
+def test_production_cors_preflight_is_not_blocked_by_service_token_middleware(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "APP_ENV", "production")
+    monkeypatch.delenv("SCAM_AIRBAG_API_TOKEN", raising=False)
+    monkeypatch.delenv("WATCHTOWER_INGEST_TOKEN", raising=False)
+    response = TestClient(main.app).options(
+        "/api/v1/investigate/stream",
+        headers={
+            "Origin": "https://scamairbag-web-sqh8.onrender.com",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-watchtower-token",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://scamairbag-web-sqh8.onrender.com"
