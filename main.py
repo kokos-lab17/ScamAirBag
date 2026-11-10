@@ -261,6 +261,11 @@ def _public_domain_evidence(trace: InvestigationTrace) -> list[Dict[str, Any]]:
 
 def _public_trace(trace: InvestigationTrace) -> Dict[str, Any]:
     """Return an audit summary without echoing raw messages or raw tool payloads."""
+    evidence_manifest = build_evidence_manifest(trace)
+    paypal_evidence = [
+        item for item in evidence_manifest["evidence_records"]
+        if item["tool_name"] in {"paypal_invoice", "paypal_order", "paypal_subscription"}
+    ]
     steps = []
     for step in trace.steps:
         result = step.result
@@ -294,7 +299,8 @@ def _public_trace(trace: InvestigationTrace) -> Dict[str, Any]:
             if trace.final_scorecard and hasattr(trace.final_scorecard, "model_dump")
             else trace.final_scorecard.dict() if trace.final_scorecard else None
         ),
-        "evidence_manifest": build_evidence_manifest(trace),
+        "evidence_manifest": evidence_manifest,
+        "paypal_evidence": paypal_evidence,
     }
 
 
