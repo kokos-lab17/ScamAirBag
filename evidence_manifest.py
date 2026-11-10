@@ -104,24 +104,28 @@ def build_evidence_manifest(trace: InvestigationTrace) -> Dict[str, Any]:
                 "sha256": sha256_json(payload),
             })
 
+    created_at = datetime.now(timezone.utc).isoformat()
+    integrity_note = (
+        "SHA-256 hashes let you detect changes to the evidence and findings in this report. "
+        "They are not a digital signature from PayPal or the external sources; provenance "
+        "labels describe how ScamAirbag obtained each observation."
+    )
     root_payload = {
         "manifest_version": "1.0",
+        "created_at": created_at,
         "investigation_status": trace.status,
+        "integrity_note": integrity_note,
         "evidence_records": [item["sha256"] for item in records],
         "findings": [item["sha256"] for item in findings],
     }
     return {
         "manifest_version": "1.0",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": created_at,
         "investigation_status": trace.status,
         "evidence_records": records,
         "findings": findings,
         "root_sha256": sha256_json(root_payload),
-        "integrity_note": (
-            "SHA-256 hashes let you detect changes to the evidence and findings in this report. "
-            "They are not a digital signature from PayPal or the external sources; provenance "
-            "labels describe how ScamAirbag obtained each observation."
-        ),
+        "integrity_note": integrity_note,
     }
 
 
@@ -157,7 +161,9 @@ def verify_evidence_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
 
     root_payload = {
         "manifest_version": manifest.get("manifest_version"),
+        "created_at": manifest.get("created_at"),
         "investigation_status": manifest.get("investigation_status"),
+        "integrity_note": manifest.get("integrity_note"),
         "evidence_records": record_hashes,
         "findings": finding_hashes,
     }
