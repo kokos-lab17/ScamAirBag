@@ -205,6 +205,31 @@ def test_paypal_account_limitation_message_gets_content_risk_findings():
     assert sum(finding.risk_impact for finding in findings) >= 40
 
 
+def test_paypal_account_limitation_scorecard_is_auditable_and_requires_verification():
+    from scoring import score_investigation
+
+    message = (
+        "[PayPal]: Your account access has been limited. "
+        "Your PayPal account is limited. You have 24 hours to solve the problem "
+        "or your account will be permanently disabled. "
+        "You have to confirm all of your account details on our secured server."
+    )
+    scorecard, _ = score_investigation(
+        InvestigationInput(user_text=message),
+        ExtractedEntities(),
+        [],
+    )
+
+    assert scorecard.risk_score == 40
+    assert scorecard.recommended_action.value == "PROCEED_WITH_MANUAL_VERIFICATION"
+    assert scorecard.confidence_level == "LOW"
+    assert {finding.rule_id for finding in scorecard.findings} >= {
+        "ARTIFICIAL_DEADLINE",
+        "ACCOUNT_ACCESS_THREAT",
+        "SENSITIVE_INFORMATION_REQUEST",
+    }
+
+
 def test_malformed_link_adds_info_finding_not_risk_points():
     from scoring import _build_findings
     entities = ExtractedEntities(malformed_urls=["123hduyen23unfhjc"])
