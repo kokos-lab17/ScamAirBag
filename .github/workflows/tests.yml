@@ -31,6 +31,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest
+      - name: Compile Python modules
+        run: python -m compileall -q agent.py main.py schemas.py tools.py scoring.py watchtower.py evidence_manifest.py threat_intelligence.py elastic_intelligence.py render_dispatch.py render_workflow_tasks.py
+      - name: Validate frontend JavaScript syntax
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          source = Path("frontend/index.html").read_text(encoding="utf-8")
+          scripts = re.findall(r"<script>(.*?)</script>", source, flags=re.DOTALL)
+          if len(scripts) != 1:
+              raise SystemExit(f"Expected one inline application script, found {len(scripts)}")
+          Path("/tmp/scamairbag-frontend.js").write_text(scripts[0], encoding="utf-8")
+          PY
+          node --check /tmp/scamairbag-frontend.js
       - name: Run regression tests
         env:
           GEMINI_API_KEY: ""
