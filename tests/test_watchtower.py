@@ -101,3 +101,16 @@ def test_watchtower_correlates_recurring_domains_without_calling_them_fraud(monk
     assert correlations[0]["domain"] == "seller-example.test"
     assert correlations[0]["prior_case_observations"] == 1
     assert "does not establish" in correlations[0]["interpretation"]
+
+
+def test_watchtower_includes_recurring_subscription_lifecycle_events():
+    expected = {
+        "BILLING.SUBSCRIPTION.CREATED",
+        "BILLING.SUBSCRIPTION.ACTIVATED",
+        "BILLING.SUBSCRIPTION.UPDATED",
+        "BILLING.SUBSCRIPTION.SUSPENDED",
+        "BILLING.SUBSCRIPTION.CANCELLED",
+        "BILLING.SUBSCRIPTION.EXPIRED",
+    }
+    assert expected.issubset(watchtower.PAYPAL_EVENT_HINTS)
+    assert all(watchtower.PAYPAL_EVENT_HINTS[name] == "SUBSCRIPTION" for name in expected)
