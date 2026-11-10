@@ -113,8 +113,24 @@ app = FastAPI(
 
 # Local development defaults. For deployment, set CORS_ORIGINS to a
 # comma-separated list of exact trusted frontend origins.
-_raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
-_allowed_origins = [origin.strip() for origin in _raw_origins.split(",") if origin.strip()]
+_raw_origins = os.getenv(
+    "CORS_ORIGINS",
+    "https://scamairbag-web-sqh8.onrender.com",
+)
+_allowed_origins = [
+    origin.strip()
+    for origin in _raw_origins.split(",")
+    if origin.strip()
+]
+
+# Always permit common local development servers, even when .env contains
+# only the deployed frontend origin. These are loopback origins, not wildcards.
+_local_dev_origins = [
+    f"http://{host}:{port}"
+    for host in ("localhost", "127.0.0.1")
+    for port in (3000, 5173, 5500, 5501)
+]
+_allowed_origins = list(dict.fromkeys(_allowed_origins + _local_dev_origins))
 
 app.add_middleware(
     CORSMiddleware,
