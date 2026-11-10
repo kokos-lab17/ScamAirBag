@@ -112,7 +112,11 @@
   <script>
     (() => {
       const $ = (id) => document.getElementById(id);
-      const DEFAULT_API = "https://scamairbag.onrender.com";
+      // Use the local API while developing through localhost; use Render for the hosted frontend.
+      const isLocalFrontend = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+      const DEFAULT_API = isLocalFrontend
+        ? "http://127.0.0.1:8000"
+        : "https://scamairbag.onrender.com";
       $("apiBase").value = DEFAULT_API;
       const form = $("investigationForm");
       const submitButton = $("submitButton");
