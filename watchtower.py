@@ -109,7 +109,7 @@ def _build_watchtower_alert(trace: InvestigationTrace) -> Dict[str, Any]:
     action = getattr(scorecard.recommended_action, "value", str(scorecard.recommended_action))
     if score >= 70:
         level, title = "CRITICAL", "High-risk indicators detected"
-    elif score >= 45:
+    elif score >= 35:
         level, title = "HIGH", "Suspicious payment activity needs review"
     elif score >= 20:
         level, title = "MEDIUM", "Some risk indicators need review"
@@ -118,7 +118,11 @@ def _build_watchtower_alert(trace: InvestigationTrace) -> Dict[str, Any]:
     else:
         level, title = "INFO", "No scored indicators were found"
     incomplete = trace.status != "COMPLETED"
-    needs_attention = incomplete or score >= 45 or action == "ABORT_PAYMENT"
+    needs_attention = incomplete or action in {"ABORT_PAYMENT", "PROCEED_WITH_MANUAL_VERIFICATION"}
+    if action == "ABORT_PAYMENT":
+        title = "High-risk indicators detected — do not pay yet"
+    elif action == "PROCEED_WITH_MANUAL_VERIFICATION":
+        title = "Pause and verify before paying"
     if incomplete:
         title = "Investigation incomplete — verify manually"
     top_findings = [
