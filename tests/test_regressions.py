@@ -1031,3 +1031,52 @@ def test_production_investigation_rejects_oversized_body(monkeypatch):
         headers={"Content-Type": "application/json", "X-Watchtower-Token": "size-test-token"},
     )
     assert response.status_code == 413
+
+
+def test_paypal_subscription_includes_verified_recurring_plan_price(monkeypatch):
+    def fake_get(path):
+        if path.endswith("/subscriptions/I-SUB-123"):
+            return {
+                "id": "I-SUB-123", "status": "ACTIVE", "plan_id": "P-PLAN-123",
+                "subscriber": {"email_address": "payer@example.com"},
+                "billing_info": {"next_billing_time": "2027-01-01T00:00:00Z",
+                                 "failed_payments_count": 0},
+            }
+        assert path.endswith("/plans/P-PLAN-123")
+        return {
+            "id": "P-PLAN-123", "name": "Monthly service", "status": "ACTIVE",
+            "billing_cycles": [{
+                "tenure_type": "REGULAR", "sequence": 1, "total_cycles": 0,
+                "frequency": {"interval_unit": "MONTH", "interval_count": 1},
+                "pricing_scheme": {"fixed_price": {"value": "19.99", "currency_code": "USD"}},
+            }],
+        }
+    monkeypatch.setattr(tools, "_paypal_get", fake_get)
+    result = tools.tool_paypal_subscription("I-SUB-123")
+    assert result.status == "SUCCESS"
+    assert result.provenance == EvidenceProvenance.VERIFIED_PAYPAL
+    assert result.data["plan_name"] == "Monthly service"
+    assert result.data["billing_cycles"][0]["price_value"] == "19.99"
+    assert result.data["billing_cycles"][0]["currency_code"] == "USD"
+    assert result.data["next_billing_time"] == "2027-01-01T00:00:00Z"
+
+
+def test_public_trace_exposes_minimized_paypal_plan_evidence_not_private_payer_email():
+    trace = InvestigationTrace(
+        input_context=InvestigationInput(identifier="I-SUB-123", identifier_hint="SUBSCRIPTION"),
+        steps=[InvestigationStep(
+            step_number=1,
+            decision=AgentDecision(action="CALL_TOOL", selected_tool="paypal_subscription",
+                                   rationale="Verify recurring plan", arguments={"subscription_id": "I-SUB-123"}),
+            result=ToolExecutionResult(
+                tool_name="paypal_subscription", status="SUCCESS",
+                provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+                data={"subscription_id": "I-SUB-123", "plan_name": "Monthly service",
+                      "billing_cycles": [{"price_value": "19.99", "currency_code": "USD"}],
+                      "subscriber_email": "private-payer@example.com"},
+            ),
+        )],
+    )
+    public = main._public_trace(trace)
+    assert public["paypal_evidence"][0]["evidence"]["plan_name"] == "Monthly service"
+    assert "private-payer@example.com" not in str(public)
