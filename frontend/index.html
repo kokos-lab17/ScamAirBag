@@ -270,6 +270,23 @@
           const state = document.createElement("span"); state.className = "source-state"; state.textContent = pretty(item.status);
           row.append(name, state); host.append(row);
         }
+        const domainEvidence = Array.isArray(trace.domain_evidence) ? trace.domain_evidence : [];
+        for (const item of domainEvidence) {
+          const card = document.createElement("div"); card.className = "detail";
+          const heading = document.createElement("div"); heading.className = "detail-title";
+          heading.textContent = `Domain observations · ${safeText(item.observations?.domain || "Unknown domain", 200)}`;
+          card.append(heading);
+          const grid = document.createElement("div"); grid.className = "detail-grid";
+          for (const [key, value] of Object.entries(item.observations || {})) {
+            if (value === null || value === undefined || value === "") continue;
+            const block = document.createElement("div"); block.className = "detail-block";
+            const label = document.createElement("div"); label.className = "detail-label"; label.textContent = pretty(key);
+            const detail = document.createElement("div"); detail.className = "detail-text";
+            detail.textContent = Array.isArray(value) ? value.join(", ") : String(value);
+            block.append(label, detail); grid.append(block);
+          }
+          card.append(grid); host.append(card);
+        }
       }
 
       function renderScorecard(trace) {
