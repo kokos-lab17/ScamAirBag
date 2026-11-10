@@ -134,3 +134,52 @@ def test_watchtower_purges_events_outside_retention_window(monkeypatch, tmp_path
         ).fetchone()
     assert expired is None
     assert fresh is not None
+
+
+def test_paypal_webhook_rejects_unverified_transmissions(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(watchtower, "_verify_paypal_signature", lambda headers, event, raw: False)
+    response = client.post("/api/v1/watchtower/paypal/webhook", json={
+        "id": "WH-EVENT-1",
+        "event_type": "INVOICING.INVOICE.SENT",
+        "resource": {"id": "INV-1"},
+    })
+    assert response.status_code == 401
+    assert "could not be verified" in response.json()["detail"]
+    assert client.get(
+        "/api/v1/watchtower/events",
+        headers={"X-Watchtower-Token": "test-watchtower-token"},
+    ).json()["events"] == []
+
+
+def test_verified_paypal_webhook_is_recorded_once_and_wakes_agent(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    scheduled = []
+    monkeypatch.setattr(watchtower, "_schedule", lambda event_id, public_trace: scheduled.append(event_id))
+    monkeypatch.setattr(watchtower, "_verify_paypal_signature", lambda headers, event, raw: True)
+    payload = {
+        "id": "WH-EVENT-2",
+        "event_type": "BILLING.SUBSCRIPTION.ACTIVATED",
+        "resource": {"id": "I-SUB-123"},
+    }
+    first = client.post("/api/v1/watchtower/paypal/webhook", json=payload)
+    second = client.post("/api/v1/watchtower/paypal/webhook", json=payload)
+    assert first.status_code == 202
+    assert first.json()["event"]["source"] == "VERIFIED_PAYPAL_WEBHOOK"
+    assert first.json()["event"]["identifier_hint"] == "SUBSCRIPTION"
+    assert second.status_code == 202
+    assert second.json()["duplicate"] is True
+    assert scheduled == ["WH-EVENT-2"]
+
+
+def test_paypal_webhook_ignores_unsubscribed_event_types(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(watchtower, "_verify_paypal_signature", lambda headers, event, raw: True)
+    response = client.post("/api/v1/watchtower/paypal/webhook", json={
+        "id": "WH-EVENT-3",
+        "event_type": "PAYMENT.CAPTURE.COMPLETED",
+        "resource": {"id": "CAPTURE-1"},
+    })
+    assert response.status_code == 202
+    assert response.json()["ignored"] is True
+    assert response.json()["reason"]
