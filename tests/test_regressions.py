@@ -599,3 +599,30 @@ def test_watchtower_startup_recovers_interrupted_jobs(tmp_path, monkeypatch):
         assert row["status"] == "COMPLETED"
 
     asyncio.run(scenario())
+
+
+def test_watchtower_invoice_investigation_requires_seller_email_domain_check(monkeypatch):
+    monkeypatch.delenv("ELASTICSEARCH_URL", raising=False)
+    monkeypatch.delenv("ELASTIC_API_KEY", raising=False)
+    monkeypatch.delenv("VIRUSTOTAL_API_KEY", raising=False)
+    invoice = ToolExecutionResult(
+        tool_name="paypal_invoice", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"invoice_id": "INV-1", "seller_email": "billing@merchant-example.test"},
+    )
+    remaining = agent._required_checks_remaining(InvestigationInput(), [invoice], None, [])
+    assert remaining[0][0] == "domain_intelligence"
+    assert remaining[0][1]["domain_or_url"] == "merchant-example.test"
+
+
+def test_subscription_payer_email_is_not_mistaken_for_seller_domain(monkeypatch):
+    monkeypatch.delenv("ELASTICSEARCH_URL", raising=False)
+    monkeypatch.delenv("ELASTIC_API_KEY", raising=False)
+    monkeypatch.delenv("VIRUSTOTAL_API_KEY", raising=False)
+    subscription = ToolExecutionResult(
+        tool_name="paypal_subscription", status="SUCCESS",
+        provenance=EvidenceProvenance.VERIFIED_PAYPAL,
+        data={"subscription_id": "SUB-1", "subscriber_email": "payer@example.test"},
+    )
+    remaining = agent._required_checks_remaining(InvestigationInput(), [subscription], None, [])
+    assert not any(name == "domain_intelligence" for name, _, _ in remaining)
