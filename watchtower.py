@@ -9,7 +9,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 import requests
 from tools import PAYPAL_BASE_URL, PAYPAL_TIMEOUT_SECONDS, _get_paypal_access_token
 from pydantic import BaseModel, Field, field_validator
-from agent import run_investigation
+from agent import MAX_INVESTIGATION_SECONDS, run_investigation
 from schemas import InvestigationInput, InvestigationTrace
 
 router = APIRouter(prefix="/api/v1/watchtower", tags=["Watchtower"])
@@ -183,11 +183,16 @@ async def _investigate_event(event_id,public_trace):
         r=db.execute("SELECT * FROM watchtower_events WHERE event_id=?",(event_id,)).fetchone()
     try:
         payload=InvestigationInput(identifier=r["identifier"],identifier_hint=r["identifier_hint"],share_anonymized_intelligence=os.getenv("WATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE","false").lower() in {"1","true","yes"})
-        trace=await asyncio.to_thread(run_investigation,payload)
+        trace=await asyncio.wait_for(
+            asyncio.to_thread(run_investigation, payload),
+            timeout=MAX_INVESTIGATION_SECONDS + 45,
+        )
         result=public_trace(trace)
         result["watchtower_alert"] = _build_watchtower_alert(trace)
         status="COMPLETED" if trace.status=="COMPLETED" else "PARTIAL" if trace.status=="PARTIAL" else "FAILED"
         _update(event_id,status=status,completed_at=_now(),result_json=json.dumps(result,separators=(",",":"),ensure_ascii=False),error_code=trace.error_code)
+    except asyncio.TimeoutError:
+        _update(event_id,status="FAILED",completed_at=_now(),error_code="WATCHTOWER_INVESTIGATION_TIMEOUT")
     except Exception:
         _update(event_id,status="FAILED",completed_at=_now(),error_code="WATCHTOWER_INVESTIGATION_FAILED")
 
