@@ -468,3 +468,59 @@ def test_email_authentication_coverage_is_not_applicable_without_headers():
     email = next(item for item in outcomes if item.source_name == "email_authentication")
     assert email.applicable is False
     assert email.status == "NOT_APPLICABLE"
+
+
+def test_watchtower_demo_event_schedules_investigation_and_persists(tmp_path, monkeypatch):
+    import asyncio
+    import watchtower
+    from schemas import InvestigationTrace, AirbagScorecard, RecommendedAction
+
+    monkeypatch.setattr(watchtower, "_DB_PATH", str(tmp_path / "watchtower.sqlite3"))
+    monkeypatch.setattr(watchtower, "_DEMO_ENABLED", True)
+    monkeypatch.setattr(watchtower, "run_investigation", lambda payload: InvestigationTrace(
+        input_context=payload, status="COMPLETED",
+        final_scorecard=AirbagScorecard(
+            risk_score=12, coverage_score=100, confidence_level="HIGH",
+            recommended_action=RecommendedAction.PROCEED_WITH_MANUAL_VERIFICATION,
+            executive_summary="Test only", findings=[]
+        )
+    ))
+    router = watchtower.build_watchtower_router(lambda trace: {
+        "status": trace.status,
+        "final_scorecard": trace.final_scorecard.model_dump(mode="json")
+    })
+    endpoint = next(route.endpoint for route in router.routes
+                    if getattr(route, "path", "") == "/api/v1/watchtower/demo/simulate-invoice")
+
+    async def scenario():
+        response = await endpoint(watchtower.DemoEventRequest(identifier="INV-DEMO"))
+        assert response["accepted"] is True
+        event_id = response["event"]["event_id"]
+        for _ in range(30):
+            await asyncio.sleep(0.02)
+            with watchtower._connect() as db:
+                row = db.execute("SELECT status, result_json FROM watchtower_events WHERE event_id=?", (event_id,)).fetchone()
+            if row["status"] in {"COMPLETED", "FAILED", "PARTIAL"}:
+                break
+        assert row["status"] == "COMPLETED"
+        assert row["result_json"] is not None
+
+    asyncio.run(scenario())
+
+
+def test_watchtower_ingest_requires_configured_shared_secret(monkeypatch):
+    import watchtower
+    from fastapi import HTTPException
+    monkeypatch.setattr(watchtower, "_INGEST_TOKEN", "expected-secret")
+    with pytest.raises(HTTPException) as exc:
+        watchtower._require_ingest_token("wrong-secret")
+    assert exc.value.status_code == 401
+
+
+def test_watchtower_requires_secret_even_when_not_configured(monkeypatch):
+    import watchtower
+    from fastapi import HTTPException
+    monkeypatch.setattr(watchtower, "_INGEST_TOKEN", "")
+    with pytest.raises(HTTPException) as exc:
+        watchtower._require_ingest_token(None)
+    assert exc.value.status_code == 401
