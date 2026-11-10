@@ -447,6 +447,18 @@
           const hash = document.createElement("div"); hash.className = "detail-text"; hash.textContent = `SHA-256 root: ${trace.evidence_manifest.root_sha256}`;
           receipt.append(title, hash); host.append(receipt);
         }
+        if (Array.isArray(trace.paypal_evidence) && trace.paypal_evidence.length) {
+          const paypalTitle = document.createElement("div"); paypalTitle.className = "detail-title";
+          paypalTitle.textContent = "Verified PayPal transaction and subscription evidence"; host.append(paypalTitle);
+          for (const item of trace.paypal_evidence) {
+            const block = document.createElement("div"); block.className = "detail";
+            const heading = document.createElement("div"); heading.className = "detail-title";
+            heading.textContent = `${pretty(item.tool_name)} · ${pretty(item.status)}`;
+            const data = document.createElement("div"); data.className = "detail-text";
+            data.textContent = JSON.stringify(item.evidence || {}, null, 2);
+            block.append(heading, data); host.append(block);
+          }
+        }
         if (score) {
           const verdict = document.createElement("div"); verdict.className = "recommendation";
           verdict.textContent = `Risk index ${score.risk_score}/100 · Coverage ${score.coverage_score}% · Confidence ${pretty(score.confidence_level)}`;
