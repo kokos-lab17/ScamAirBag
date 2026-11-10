@@ -76,7 +76,7 @@
         <div class="field" style="display:flex;align-items:end"><button id="simulateInvoiceButton" class="btn" type="button" disabled>Simulate incoming invoice event</button></div>
       </div>
       <div class="actions"><span id="watchtowerActionStatus" class="status">Loading event history…</span><button id="refreshWatchtower" class="btn secondary" type="button">Refresh activity</button></div>
-      <div id="watchtowerEvents" class="timeline" style="margin-top:16px"><div class="status">No events loaded.</div></div>
+      <div id="watchtowerEvents" class="timeline" style="margin-top:16px"><div class="status">No events loaded.</div></div>\n      <div id="watchtowerDetail" class="detail" style="margin-top:16px"><div class="detail-title">Event evidence</div><div class="status">Select an event to inspect its investigation evidence.</div></div>
       <div class="hint">The simulator is explicitly labelled. It triggers an automatic investigation and attempts a real PayPal Sandbox invoice lookup; it does not fabricate invoice evidence or represent a real webhook.</div>
     </section>
 \n    <section id="analyze" class="panel">
@@ -365,6 +365,47 @@
       }
 
 
+      function renderWatchtowerDetail(item) {
+        const host = $("watchtowerDetail"); host.replaceChildren();
+        const heading = document.createElement("div"); heading.className = "detail-title";
+        heading.textContent = `Event ${item.event_id} · ${pretty(item.status)}`; host.append(heading);
+        const meta = document.createElement("div"); meta.className = "detail-text";
+        meta.textContent = `Source: ${item.source} · Type: ${item.event_type} · Resource: ${item.identifier_hint} ${item.identifier} · Received: ${new Date(item.received_at).toLocaleString()}`;
+        host.append(meta);
+        if (!item.result) {
+          const pending = document.createElement("div"); pending.className = "status";
+          pending.textContent = item.error_code || "The event is recorded; the autonomous investigation has not returned a result yet.";
+          host.append(pending); return;
+        }
+        const trace = item.result; const score = trace.final_scorecard;
+        if (score) {
+          const verdict = document.createElement("div"); verdict.className = "recommendation";
+          verdict.textContent = `Risk index ${score.risk_score}/100 · Coverage ${score.coverage_score}% · Confidence ${pretty(score.confidence_level)}`;
+          host.append(verdict);
+          const action = document.createElement("div"); action.className = "detail-text";
+          action.textContent = `Recommendation: ${pretty(score.recommended_action)}`; host.append(action);
+          const findingsTitle = document.createElement("div"); findingsTitle.className = "detail-title"; findingsTitle.textContent = "Evidence findings"; host.append(findingsTitle);
+          const findings = Array.isArray(score.findings) ? score.findings : [];
+          if (!findings.length) {
+            const none = document.createElement("div"); none.className = "status"; none.textContent = "No scored findings were returned. This is not proof that the payment is safe."; host.append(none);
+          }
+          for (const finding of findings) {
+            const block = document.createElement("div"); block.className = "detail";
+            const title = document.createElement("strong"); title.textContent = `${pretty(finding.severity)} · ${finding.description || finding.rule_id}`;
+            const proof = document.createElement("div"); proof.className = "detail-text";
+            proof.textContent = `Provenance: ${pretty(finding.provenance)} · Impact: ${finding.risk_impact}\nEvidence: ${finding.supporting_evidence || "No supporting detail returned."}`;
+            block.append(title, proof); host.append(block);
+          }
+        }
+        const stepsTitle = document.createElement("div"); stepsTitle.className = "detail-title"; stepsTitle.textContent = "Agent investigation steps"; host.append(stepsTitle);
+        for (const step of (trace.steps || [])) {
+          const line = document.createElement("div"); line.className = "source-row";
+          const name = document.createElement("span"); name.className = "source-name"; name.textContent = `#${step.step_number} ${pretty(step.tool_name)}`;
+          const status = document.createElement("span"); status.className = "source-state"; status.textContent = `${pretty(step.status)} · ${pretty(step.provenance)}`;
+          line.append(name, status); host.append(line);
+        }
+      }
+
       async function refreshWatchtower() {
         const base = $("apiBase").value.trim().replace(/\\/+$/, "");
         try {
@@ -395,7 +436,16 @@
             } else if (item.error_code) {
               const error = document.createElement("span"); error.textContent = item.error_code; body.append(error);
             }
-            row.append(dot, body); host.append(row);
+            const inspect = document.createElement("button"); inspect.className = "btn secondary"; inspect.type = "button"; inspect.textContent = "View evidence";
+            inspect.addEventListener("click", async () => {
+              try {
+                const base = $("apiBase").value.trim().replace(/\\/+$/, "");
+                const response = await fetch(`${base}/api/v1/watchtower/events/${encodeURIComponent(item.event_id)}`);
+                const detail = await response.json(); if (!response.ok) throw new Error(detail.detail || "Unable to load event evidence.");
+                renderWatchtowerDetail(detail);
+              } catch (error) { $("watchtowerActionStatus").textContent = error.message; }
+            });
+            body.append(inspect); row.append(dot, body); host.append(row);
           }
           $("watchtowerActionStatus").textContent = `${data.events.length} recent event(s) · counts: ${JSON.stringify(status.counts)}`;
         } catch (error) {
