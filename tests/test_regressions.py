@@ -155,6 +155,45 @@ def test_streaming_endpoint_emits_final_failed_status_without_raw_input(monkeypa
     assert "RAW_PRIVATE_TEXT_DO_NOT_ECHO" not in response.text
 
 
+def test_tls_observation_records_verified_certificate_metadata(monkeypatch):
+    class FakeTLSSocket:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def getpeercert(self):
+            return {
+                "notBefore": "Jan  1 00:00:00 2025 GMT",
+                "notAfter": "Jan  1 00:00:00 2027 GMT",
+                "issuer": ((('commonName', 'Test CA'),),),
+                "subjectAltName": (("DNS", "example.com"),),
+            }
+    class FakeRawSocket:
+        def close(self): pass
+    class FakeContext:
+        def wrap_socket(self, raw, server_hostname):
+            assert server_hostname == "example.com"
+            return FakeTLSSocket()
+    monkeypatch.setattr(tools.ssl, "create_default_context", lambda: FakeContext())
+    monkeypatch.setattr(tools.socket, "create_connection", lambda address, timeout: FakeRawSocket())
+    result = tools._tls_certificate_observation("example.com", ["93.184.216.34"])
+    assert result["tls_status"] == "VALID"
+    assert result["tls_hostname_verified"] is True
+    assert result["tls_subject_alt_names"] == ["example.com"]
+    assert result["tls_issuer"] == "commonName=Test CA"
+
+
+def test_tls_observation_reports_certificate_verification_failure(monkeypatch):
+    class FakeRawSocket:
+        def close(self): pass
+    class FakeContext:
+        def wrap_socket(self, raw, server_hostname):
+            raise tools.ssl.SSLCertVerificationError("hostname mismatch")
+    monkeypatch.setattr(tools.ssl, "create_default_context", lambda: FakeContext())
+    monkeypatch.setattr(tools.socket, "create_connection", lambda address, timeout: FakeRawSocket())
+    result = tools._tls_certificate_observation("example.com", ["93.184.216.34"])
+    assert result["tls_status"] == "INVALID"
+    assert result["tls_error"] == "TLS_CERTIFICATE_VERIFICATION_FAILED"
+    assert result["tls_hostname_verified"] is False
+
 def test_link_extraction_detects_malformed_paypal_link():
     result = tools._extract_link_evidence("PayPal link:123hduyen23unfhjc")
     assert result["detected_urls"] == []
