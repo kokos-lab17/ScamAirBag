@@ -173,8 +173,21 @@ def _compare_claimed_amount(entities: ExtractedEntities, tool_results: Sequence[
         return None, "The extracted payment amount did not include a verbatim supporting quote found in the submitted message."
     if not re.fullmatch(r"[A-Z]{3}", currency):
         return None, "The message's currency could not be established unambiguously, so no cross-source amount comparison was made."
+    # The quoted text itself must support both the numeric value and currency;
+    # this prevents a model from attaching an unrelated exact quote to a guess.
+    numeric_quote = re.search(r"(?<![\\d.])(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{1,2})?(?![\\d.])", quote)
+    if not numeric_quote:
+        return None, "The exact supporting quote does not contain a parseable payment amount."
+    explicit_currency = currency in quote.upper()
+    unique_symbols = {"₹": "INR", "€": "EUR", "£": "GBP"}
+    explicit_currency = explicit_currency or any(symbol in quote and code == currency for symbol, code in unique_symbols.items())
+    if not explicit_currency:
+        return None, "The exact supporting quote does not establish the claimed currency code."
     try:
-        claimed_value = Decimal(claimed.replace(",", "").strip()).quantize(Decimal("0.01"))
+        claimed_value = Decimal(claimed.replace(",", "").strip())
+        quoted_value = Decimal(numeric_quote.group(0).replace(",", ""))
+        if claimed_value != quoted_value:
+            return None, "The extracted amount does not match the numeric value in its exact supporting quote."
     except (InvalidOperation, AttributeError):
         return None, "The stated amount could not be normalized safely."
     verified = [item for item in _paypal_amounts(tool_results) if item[1] == currency]
@@ -182,7 +195,7 @@ def _compare_claimed_amount(entities: ExtractedEntities, tool_results: Sequence[
         return None, f"No verified PayPal invoice/order amount in {currency} was available for comparison."
     for value, code, source in verified:
         try:
-            if Decimal(value).quantize(Decimal("0.01")) != claimed_value:
+            if Decimal(value) != claimed_value:
                 return False, f"Message quote: {quote!r}; stated amount: {claimed_value} {currency}; {source}: {value} {code}."
         except InvalidOperation:
             continue
