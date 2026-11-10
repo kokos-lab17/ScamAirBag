@@ -322,6 +322,26 @@ def build_source_outcomes(
                     EvidenceProvenance.UNAVAILABLE, "ELASTIC_NOT_CONFIGURED",
                 ))
 
+    urls = list(dict.fromkeys(extracted_entities.detected_urls if extracted_entities else []))
+    if not urls:
+        outcomes.append(_source_outcome(
+            "link_redirect_inspection", False, "NOT_APPLICABLE",
+            EvidenceProvenance.UNAVAILABLE, "NO_COMPLETE_URL_DETECTED",
+        ))
+    else:
+        for url in urls:
+            inspected = next((
+                item for item in reversed(tool_results)
+                if item.tool_name == "link_redirect_inspection"
+                and item.data.get("initial_url") == url
+            ), None)
+            outcomes.append(_source_outcome(
+                f"link_redirect:{_domain_key(url)}", True,
+                inspected.status if inspected else "SKIPPED",
+                inspected.provenance if inspected else EvidenceProvenance.UNAVAILABLE,
+                inspected.error_code if inspected else "REDIRECT_INSPECTION_NOT_ATTEMPTED",
+            ))
+
     return outcomes
 
 
