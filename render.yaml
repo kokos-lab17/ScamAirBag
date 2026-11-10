@@ -24,7 +24,7 @@ services:
       - key: GEMINI_MODEL
         value: gemini-3.1-flash-lite
       - key: GEMINI_FALLBACK_MODEL
-        value: gemini-3.1-flash-lite
+        value: gemini-2.5-flash
       - key: PAYPAL_CLIENT_ID
         sync: false
       - key: PAYPAL_CLIENT_SECRET
@@ -37,8 +37,6 @@ services:
         value: scamairbag-investigations
       - key: ELASTIC_TIMEOUT_SECONDS
         value: "5"
-      - key: ELASTIC_STORE_CASES
-        value: "false"
       - key: RENDER_API_KEY
         sync: false
       - key: RENDER_INDEX_TASK_SLUG
