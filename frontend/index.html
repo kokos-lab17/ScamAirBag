@@ -76,6 +76,7 @@
         <div class="field" style="display:flex;align-items:end"><button id="simulateInvoiceButton" class="btn" type="button" disabled>Simulate incoming invoice event</button></div>
       </div>
       <div class="actions"><span id="watchtowerActionStatus" class="status">Loading event history…</span><button id="refreshWatchtower" class="btn secondary" type="button">Refresh activity</button></div>
+      <div id="watchtowerAlerts" class="timeline" style="margin-top:14px"><div class="status">No alerts yet.</div></div>
       <div id="watchtowerEvents" class="timeline" style="margin-top:16px"><div class="status">No events loaded.</div></div>\n      <div id="watchtowerDetail" class="detail" style="margin-top:16px"><div class="detail-title">Event evidence</div><div class="status">Select an event to inspect its investigation evidence.</div></div>
       <div class="hint">The simulator is explicitly labelled. It triggers an automatic investigation and attempts a real PayPal Sandbox invoice lookup; it does not fabricate invoice evidence or represent a real webhook.</div>
     </section>
@@ -418,6 +419,22 @@
           $("watchtowerState").textContent = status.paypal_webhook_configured ? "PAYPAL WEBHOOK READY" : "LISTENER READY · WEBHOOK NOT CONFIGURED";
           $("simulateInvoiceButton").disabled = !status.demo_enabled;
           $("watchtowerNote").textContent = `${status.monitoring_claim} PayPal webhook ${status.paypal_webhook_configured ? "is configured" : "is not configured"} at ${status.paypal_webhook_path}.`;
+          const alertsHost = $("watchtowerAlerts"); alertsHost.replaceChildren();
+          const alerts = data.events.map(item => ({item, alert: item.result?.watchtower_alert}))
+            .filter(entry => entry.alert?.needs_attention);
+          if (!alerts.length) {
+            const empty = document.createElement("div"); empty.className = "status";
+            empty.textContent = "No events currently require attention.";
+            alertsHost.append(empty);
+          }
+          for (const entry of alerts) {
+            const card = document.createElement("div"); card.className = "detail";
+            const title = document.createElement("strong"); title.textContent = `${entry.alert.level} · ${entry.alert.title}`;
+            const message = document.createElement("div"); message.className = "detail-text"; message.textContent = entry.alert.message;
+            const context = document.createElement("div"); context.className = "hint";
+            context.textContent = `${entry.item.event_type} · ${entry.item.identifier_hint} ${entry.item.identifier}`;
+            card.append(title, message, context); alertsHost.append(card);
+          }
           const host = $("watchtowerEvents"); host.replaceChildren();
           if (!data.events.length) host.textContent = "No incoming events yet. Trigger a labelled Sandbox demo event to see the autonomous workflow.";
           for (const item of data.events) {
