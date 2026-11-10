@@ -6,6 +6,10 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
+    disk:
+      name: scamairbag-watchtower-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
@@ -38,6 +42,18 @@ services:
       - key: RENDER_API_KEY
         sync: false
       - key: RENDER_INDEX_TASK_SLUG
+        sync: false
+      - key: WATCHTOWER_PUBLIC_API_URL
+        sync: false
+      - key: WATCHTOWER_INGEST_TOKEN
+        sync: false
+      - key: WATCHTOWER_DB_PATH
+        value: /var/data/watchtower.sqlite3
+      - key: WATCHTOWER_DEMO_ENABLED
+        value: "false"
+      - key: WATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE
+        value: "false"
+      - key: PAYPAL_WEBHOOK_ID
         sync: false
 
   - type: static
