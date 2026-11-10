@@ -24,6 +24,19 @@ def _connect():
     if str(path.parent) not in {"","."}: path.parent.mkdir(parents=True,exist_ok=True)
     db=sqlite3.connect(str(path),timeout=10); db.row_factory=sqlite3.Row; return db
 
+@contextmanager
+def _db():
+    connection = _connect()
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
 def init_watchtower():
     with _db() as db:
         db.execute("""CREATE TABLE IF NOT EXISTS watchtower_events (
@@ -73,7 +86,7 @@ def _require_ingest_token(token:Optional[str]):
 
 def _create_event(event_id,source,event_type,identifier,hint):
     now=_now()
-    with _connect() as db:
+    with _db() as db:
         db.execute("""INSERT OR IGNORE INTO watchtower_events
         (event_id,source,event_type,identifier,identifier_hint,status,received_at,updated_at)
         VALUES (?,?,?,?,?,'RECEIVED',?,?)""",(event_id,source,event_type,identifier,hint,now,now))
@@ -84,10 +97,10 @@ def _update(event_id,**values):
     allowed={"status","started_at","completed_at","result_json","error_code"}
     fields={k:v for k,v in values.items() if k in allowed}; fields["updated_at"]=_now()
     sql=", ".join(f"{k}=?" for k in fields)
-    with _connect() as db: db.execute(f"UPDATE watchtower_events SET {sql} WHERE event_id=?",(*fields.values(),event_id))
+    with _db() as db: db.execute(f"UPDATE watchtower_events SET {sql} WHERE event_id=?",(*fields.values(),event_id))
 
 async def _investigate_event(event_id,public_trace):
-    with _connect() as db: r=db.execute("SELECT * FROM watchtower_events WHERE event_id=?",(event_id,)).fetchone()
+    with _db() as db: r=db.execute("SELECT * FROM watchtower_events WHERE event_id=?",(event_id,)).fetchone()
     if r is None or r["status"]!="RECEIVED": return
     _update(event_id,status="INVESTIGATING",started_at=_now())
     try:
@@ -131,7 +144,7 @@ def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,
     init_watchtower()
     @router.get("/status")
     async def status():
-        with _connect() as db:
+        with _db() as db:
             counts={r["status"]:r["count"] for r in db.execute("SELECT status,COUNT(*) AS count FROM watchtower_events GROUP BY status")}
             latest=db.execute("SELECT received_at FROM watchtower_events ORDER BY received_at DESC LIMIT 1").fetchone()
         return {"service":"watchtower","state":"READY","demo_enabled":_DEMO_ENABLED,
@@ -142,11 +155,11 @@ def build_watchtower_router(public_trace:Callable[[InvestigationTrace],Dict[str,
     @router.get("/events")
     async def events(limit:int=30):
         limit=max(1,min(limit,100))
-        with _connect() as db: rows=db.execute("SELECT * FROM watchtower_events ORDER BY received_at DESC LIMIT ?",(limit,)).fetchall()
+        with _db() as db: rows=db.execute("SELECT * FROM watchtower_events ORDER BY received_at DESC LIMIT ?",(limit,)).fetchall()
         return {"events":[_row(r) for r in rows]}
     @router.get("/events/{event_id}")
     async def event_detail(event_id:str):
-        with _connect() as db: r=db.execute("SELECT * FROM watchtower_events WHERE event_id=?",(event_id,)).fetchone()
+        with _db() as db: r=db.execute("SELECT * FROM watchtower_events WHERE event_id=?",(event_id,)).fetchone()
         if r is None: raise HTTPException(status_code=404,detail="Watchtower event not found.")
         return _row(r)
     @router.post("/events",status_code=202)
