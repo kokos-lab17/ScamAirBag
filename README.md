@@ -126,7 +126,7 @@ Watchtower adds an event intake path that can wake the existing investigation ag
 **Supported paths:**
 
 - **Verified PayPal Invoicing webhooks:** `POST /api/v1/watchtower/paypal/webhook` verifies the incoming transmission with PayPal's `/v1/notifications/verify-webhook-signature` API before trusting the event. The initial pre-payment allowlist includes invoice events `INVOICING.INVOICE.CREATED`, `INVOICING.INVOICE.SENT`, and `INVOICING.INVOICE.UPDATED`; order event `CHECKOUT.ORDER.APPROVED`; and subscription events `BILLING.SUBSCRIPTION.CREATED`, `BILLING.SUBSCRIPTION.ACTIVATED`, and `BILLING.SUBSCRIPTION.UPDATED`. A verified event automatically schedules the matching PayPal Sandbox invoice, order, or subscription lookup and investigation.
-- **Authenticated generic event intake:** `POST /api/v1/watchtower/events` requires the `X-Watchtower-Token` header matching `WATCHTOWER_INGEST_TOKEN`. This is a trusted integration endpoint, not proof that the sender is PayPal.
+- **Authenticated generic event intake:** `POST /api/v1/watchtower/events` requires the `X-Watchtower-Token` header matching `WATCHTOWER_INGEST_TOKEN`. The same token protects private event-history reads and the demo trigger; enter it in the Watchtower dashboard's access-token field. This is a trusted integration endpoint, not proof that the sender is PayPal.
 - **Explicit demo simulator:** `POST /api/v1/watchtower/demo/simulate-invoice` is available only when `WATCHTOWER_DEMO_ENABLED=true`. The dashboard labels this as simulated. The investigation still attempts a real Sandbox invoice lookup; no invoice facts are fabricated.
 
 ### Configure a PayPal Sandbox webhook
