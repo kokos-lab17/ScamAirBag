@@ -374,9 +374,9 @@
           ]);
           if (!statusResponse.ok || !eventsResponse.ok) throw new Error("Watchtower API unavailable");
           const status = await statusResponse.json(); const data = await eventsResponse.json();
-          $("watchtowerState").textContent = status.demo_enabled ? "DEMO LISTENER READY" : "LISTENER READY";
+          $("watchtowerState").textContent = status.paypal_webhook_configured ? "PAYPAL WEBHOOK READY" : "LISTENER READY · WEBHOOK NOT CONFIGURED";
           $("simulateInvoiceButton").disabled = !status.demo_enabled;
-          $("watchtowerNote").textContent = status.monitoring_claim;
+          $("watchtowerNote").textContent = `${status.monitoring_claim} PayPal webhook ${status.paypal_webhook_configured ? "is configured" : "is not configured"} at ${status.paypal_webhook_path}.`;
           const host = $("watchtowerEvents"); host.replaceChildren();
           if (!data.events.length) host.textContent = "No incoming events yet. Trigger a labelled Sandbox demo event to see the autonomous workflow.";
           for (const item of data.events) {
