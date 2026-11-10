@@ -125,6 +125,20 @@
         <section id="coverage" class="panel"><div class="panel-head"><h2 class="section-title">Evidence checks</h2><span class="eyebrow">Source coverage</span></div><div id="sources" class="source-list"><div class="status">Waiting for source checks.</div></div></section>
         <section id="activity" class="panel"><div class="panel-head"><h2 class="section-title">Investigation activity</h2><span class="eyebrow">Progress log</span></div><div id="timeline" class="timeline"><div class="status">Waiting for agent activity.</div></div></section>
       </div>
+      <section id="evidenceReceipt" class="panel">
+        <div class="panel-head"><h2 class="section-title">Evidence receipt</h2><span class="eyebrow">Integrity manifest</span></div>
+        <div class="detail">
+          <div class="detail-label">Manifest SHA-256 root</div>
+          <div id="evidenceRootHash" class="detail-text">Waiting for completed evidence.</div>
+        </div>
+        <div id="evidenceCounts" class="hint">No evidence manifest available.</div>
+        <p id="evidenceIntegrityNote" class="hint">The evidence receipt will explain exactly what its hashes prove and what they do not.</p>
+        <div class="actions">
+          <button id="verifyEvidenceButton" class="btn secondary" type="button" disabled>Verify receipt integrity</button>
+          <button id="downloadEvidenceButton" class="btn secondary" type="button" disabled>Export evidence JSON</button>
+          <span id="evidenceVerifyStatus" class="status" role="status">No receipt loaded.</span>
+        </div>
+      </section>
     </section>
     <p class="notice">ScamAirbag provides evidence-based risk indicators, not a guarantee that a payment is safe or fraudulent. Verify through official PayPal channels before paying.</p>
   </main>
@@ -309,6 +323,21 @@
         }
       }
 
+      let currentEvidenceManifest = null;
+
+      function renderEvidenceManifest(trace) {
+        const manifest = trace?.evidence_manifest;
+        currentEvidenceManifest = manifest && typeof manifest === "object" ? manifest : null;
+        $("evidenceRootHash").textContent = currentEvidenceManifest?.root_sha256 || "No manifest returned.";
+        const evidenceCount = currentEvidenceManifest?.evidence_records?.length || 0;
+        const findingCount = currentEvidenceManifest?.findings?.length || 0;
+        $("evidenceCounts").textContent = `${evidenceCount} evidence record(s) · ${findingCount} finding(s) · version ${currentEvidenceManifest?.manifest_version || "—"}`;
+        $("evidenceIntegrityNote").textContent = currentEvidenceManifest?.integrity_note || "The API did not return an evidence integrity note.";
+        $("verifyEvidenceButton").disabled = !currentEvidenceManifest;
+        $("downloadEvidenceButton").disabled = !currentEvidenceManifest;
+        $("evidenceVerifyStatus").textContent = currentEvidenceManifest ? "Receipt ready for integrity verification." : "No receipt loaded.";
+      }
+
       function renderScorecard(trace) {
         const scorecard = trace?.final_scorecard;
         if (!scorecard) throw new Error("The API returned no final scorecard.");
@@ -328,7 +357,7 @@
         $("verdictNote").textContent = trace.status === "COMPLETED"
           ? "Risk index is deterministic and explainable; it is not a probability or a guarantee. A low score does not prove legitimacy."
           : `This was a ${String(trace.status || "partial").toLowerCase()} investigation${trace.error_code ? ` (${trace.error_code})` : ""}. Do not treat it as a completed safety check.`;
-        renderFindings(scorecard); renderSources(trace);
+        renderFindings(scorecard); renderSources(trace); renderEvidenceManifest(trace);
       }
 
       function parseSSEBlock(block) {
@@ -561,6 +590,39 @@
       });
       refreshWatchtower();
       setInterval(refreshWatchtower, 10000);
+
+      $("verifyEvidenceButton").addEventListener("click", async () => {
+        if (!currentEvidenceManifest) return;
+        const button = $("verifyEvidenceButton"); button.disabled = true;
+        $("evidenceVerifyStatus").textContent = "Verifying evidence hashes…";
+        try {
+          const base = $("apiBase").value.trim().replace(/\\/+$/, "");
+          const token = $("apiAccessToken").value.trim();
+          const headers = { "Content-Type": "application/json" };
+          if (token) headers["X-Watchtower-Token"] = token;
+          const response = await fetch(`${base}/api/v1/evidence/verify`, {
+            method: "POST", headers, body: JSON.stringify({ manifest: currentEvidenceManifest })
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "Evidence verification request failed.");
+          $("evidenceVerifyStatus").textContent = result.valid
+            ? `Integrity verified · ${result.verified_evidence_records} evidence record(s) · ${result.verified_findings} finding(s).`
+            : `Integrity check failed · ${(result.errors || []).join(" ")}`;
+          $("evidenceVerifyStatus").className = result.valid ? "status" : "status error";
+        } catch (error) {
+          $("evidenceVerifyStatus").textContent = error.message;
+          $("evidenceVerifyStatus").className = "status error";
+        } finally { button.disabled = false; }
+      });
+
+      $("downloadEvidenceButton").addEventListener("click", () => {
+        if (!currentEvidenceManifest) return;
+        const blob = new Blob([JSON.stringify(currentEvidenceManifest, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url; link.download = `scamairbag-evidence-${Date.now()}.json`;
+        document.body.append(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+      });
 
       $("findingsSearch").addEventListener("input", event => {
         if (gridApi) gridApi.setGridOption("quickFilterText", event.target.value);
