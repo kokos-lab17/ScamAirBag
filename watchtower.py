@@ -17,6 +17,8 @@ _DB_PATH = os.getenv("WATCHTOWER_DB_PATH", "watchtower.sqlite3")
 _DEMO_ENABLED = os.getenv("WATCHTOWER_DEMO_ENABLED", "false").lower() in {"1","true","yes"}
 _INGEST_TOKEN = os.getenv("WATCHTOWER_INGEST_TOKEN", "")
 _TASKS: set[asyncio.Task] = set()
+_WATCHTOWER_MAX_CONCURRENT = max(1, min(4, int(os.getenv("WATCHTOWER_MAX_CONCURRENT", "2"))))
+_WORKER_SEMAPHORE = asyncio.Semaphore(_WATCHTOWER_MAX_CONCURRENT)
 
 def _now(): return datetime.now(timezone.utc).isoformat()
 def _connect():
@@ -245,7 +247,10 @@ async def _investigate_event(event_id,public_trace):
         _update(event_id,status="FAILED",completed_at=_now(),error_code="WATCHTOWER_INVESTIGATION_FAILED")
 
 def _schedule(event_id,public_trace):
-    task=asyncio.create_task(_investigate_event(event_id,public_trace)); _TASKS.add(task); task.add_done_callback(_TASKS.discard)
+    async def bounded_investigation():
+        async with _WORKER_SEMAPHORE:
+            await _investigate_event(event_id, public_trace)
+    task=asyncio.create_task(bounded_investigation()); _TASKS.add(task); task.add_done_callback(_TASKS.discard)
 
 
 def _verify_paypal_signature(headers: Dict[str, str], event: Dict[str, Any], raw_body: bytes) -> bool:
