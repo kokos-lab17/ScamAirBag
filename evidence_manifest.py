@@ -31,8 +31,10 @@ def _public_evidence(tool_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
         ),
         "paypal_order": ("order_id", "status", "intent", "purchase_units"),
         "paypal_subscription": (
-            "subscription_id", "status", "plan_id", "start_time",
-            "next_billing_time", "failed_payments_count", "cycle_executions",
+            "subscription_id", "status", "plan_id", "plan_name", "plan_status",
+            "product_id", "plan_details_status", "billing_cycles", "start_time",
+            "next_billing_time", "failed_payments_count", "outstanding_balance",
+            "last_payment", "cycle_executions", "auto_bill_outstanding", "setup_fee", "taxes",
         ),
         "domain_intelligence": (
             "domain", "dns_status", "whois_status", "domain_age_days",
