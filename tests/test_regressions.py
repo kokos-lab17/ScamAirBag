@@ -713,3 +713,35 @@ def test_watchtower_demo_trigger_requires_access_token(tmp_path, monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(endpoint(watchtower.DemoEventRequest(identifier="INV-1"), x_watchtower_token=None))
     assert exc.value.status_code == 401
+
+
+def test_watchtower_registers_paypal_webhook_and_persists_id(tmp_path, monkeypatch):
+    import asyncio
+    import watchtower
+
+    monkeypatch.setattr(watchtower, "_DB_PATH", str(tmp_path / "watchtower.sqlite3"))
+    monkeypatch.setattr(watchtower, "_INGEST_TOKEN", "private-token")
+    monkeypatch.setattr(watchtower, "_get_paypal_access_token", lambda: "oauth-token")
+    monkeypatch.setattr(watchtower, "PAYPAL_BASE_URL", "https://api-m.sandbox.paypal.com")
+    monkeypatch.setenv("WATCHTOWER_PUBLIC_API_URL", "https://scamairbag.example")
+    monkeypatch.delenv("PAYPAL_WEBHOOK_ID", raising=False)
+    captured = {}
+    class Response:
+        def raise_for_status(self): pass
+        def json(self): return {"id": "WH-REGISTERED"}
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return Response()
+    monkeypatch.setattr(watchtower.requests, "post", fake_post)
+
+    router = watchtower.build_watchtower_router(lambda trace: {})
+    endpoint = next(route.endpoint for route in router.routes
+                    if getattr(route, "path", "") == "/api/v1/watchtower/paypal/register")
+    result = asyncio.run(endpoint(x_watchtower_token="private-token"))
+    assert result["registered"] is True
+    assert result["webhook_id"] == "WH-REGISTERED"
+    assert captured["url"].endswith("/v1/notifications/webhooks")
+    assert captured["json"]["url"] == "https://scamairbag.example/api/v1/watchtower/paypal/webhook"
+    assert "CHECKOUT.ORDER.APPROVED" in [item["name"] for item in captured["json"]["event_types"]]
+    assert watchtower._get_setting("PAYPAL_WEBHOOK_ID") == "WH-REGISTERED"
