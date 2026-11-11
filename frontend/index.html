@@ -367,16 +367,16 @@
         const coverage = Math.max(0, Math.min(100, Number(scorecard.coverage_score ?? 0)));
         $("riskScore").textContent = score;
         $("scoreRing").style.setProperty("--score-angle", `${score * 3.6}deg`);
-        const level = score >= 70 ? "High risk" : score >= 35 ? "Elevated risk" : "Lower observed risk";
+        const level = score >= 85 ? "Critical risk" : score >= 65 ? "High risk" : score >= 35 ? "Elevated risk" : "Lower observed risk";
         $("riskLevel").textContent = level;
-        $("riskLevel").className = `pill ${score >= 70 ? "high" : score >= 35 ? "medium" : "low"}`;
+        $("riskLevel").className = `pill ${score >= 65 ? "high" : score >= 35 ? "medium" : "low"}`;
         $("confidence").textContent = `Confidence: ${pretty(scorecard.confidence_level)}`;
         $("coverageScore").textContent = `Coverage: ${coverage}%`;
         $("completionState").textContent = pretty(trace.status || "Unknown status");
         $("summary").textContent = buildVerdict(scorecard, trace);
         $("recommendation").textContent = actionLabel(scorecard.recommended_action);
         $("verdictNote").textContent = trace.status === "COMPLETED"
-          ? "Risk index is deterministic and explainable; it is not a probability or a guarantee. A low score does not prove legitimacy."
+          ? "Risk level reflects the message’s warning signs; it is not a probability or a guarantee. A low score does not prove legitimacy. Verify through the provider’s official app or website."
           : `This was a ${String(trace.status || "partial").toLowerCase()} investigation${trace.error_code ? ` (${trace.error_code})` : ""}. Do not treat it as a completed safety check.`;
         renderFindings(scorecard); renderSources(trace); renderEvidenceManifest(trace);
       }
