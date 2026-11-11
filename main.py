@@ -47,6 +47,7 @@ from agent import run_investigation
 from schemas import InvestigationInput, InvestigationTrace
 from watchtower import _get_setting, build_watchtower_router, resume_watchtower_jobs
 from evidence_manifest import build_evidence_manifest, verify_evidence_manifest
+from protection_policy import decide_protection
 
 logger = logging.getLogger("scamairbag.api")
 
@@ -312,6 +313,10 @@ def _public_trace(trace: InvestigationTrace) -> Dict[str, Any]:
         ),
         "evidence_manifest": evidence_manifest,
         "paypal_evidence": paypal_evidence,
+        "protection_decision": decide_protection(
+            risk_score=trace.final_scorecard.risk_score if trace.final_scorecard else 0,
+            investigation_complete=trace.status == "COMPLETED" and trace.final_scorecard is not None,
+        ).as_dict(),
     }
 
 
