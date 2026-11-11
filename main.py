@@ -47,6 +47,7 @@ from agent import run_investigation
 from schemas import InvestigationInput, InvestigationTrace
 from watchtower import _get_setting, build_watchtower_router, resume_watchtower_jobs
 from evidence_manifest import build_evidence_manifest, verify_evidence_manifest
+from protection_policy import decide_protection
 
 logger = logging.getLogger("scamairbag.api")
 
@@ -129,9 +130,20 @@ class InvestigationRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    """Recover durable Watchtower event records when the API process starts."""
+    """Recover event jobs and run configured inbox guardians for the API lifetime."""
+    import watchtower as watchtower_module
+    watchtower_module._PUBLIC_TRACE = _public_trace
     await resume_watchtower_jobs(_public_trace)
-    yield
+    from gmail_guardian import gmail_guardian_loop
+    gmail_task = asyncio.create_task(gmail_guardian_loop(), name="gmail-inbox-guardian")
+    try:
+        yield
+    finally:
+        gmail_task.cancel()
+        try:
+            await gmail_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(
@@ -312,6 +324,10 @@ def _public_trace(trace: InvestigationTrace) -> Dict[str, Any]:
         ),
         "evidence_manifest": evidence_manifest,
         "paypal_evidence": paypal_evidence,
+        "protection_decision": decide_protection(
+            risk_score=trace.final_scorecard.risk_score if trace.final_scorecard else 0,
+            investigation_complete=trace.status == "COMPLETED" and trace.final_scorecard is not None,
+        ).as_dict(),
     }
 
 
@@ -329,6 +345,22 @@ def _sse(event_name: str, payload: Dict[str, Any]) -> str:
 async def verify_evidence(payload: EvidenceManifestVerificationRequest) -> Dict[str, Any]:
     """Verify hashes in a previously exported evidence manifest."""
     return verify_evidence_manifest(payload.manifest, signing_key=_evidence_signing_key())
+
+
+@app.get("/api/v1/guardian/status")
+async def guardian_status() -> Dict[str, Any]:
+    """Expose integration readiness without revealing OAuth credentials."""
+    gmail_ready = all(os.getenv(key) for key in (
+        "GMAIL_OAUTH_CLIENT_ID", "GMAIL_OAUTH_CLIENT_SECRET", "GMAIL_OAUTH_REFRESH_TOKEN"
+    ))
+    return {
+        "agent": "RUNNING",
+        "gmail": "CONNECTED_CONFIGURED" if gmail_ready else "NOT_CONNECTED",
+        "gmail_poll_seconds": max(60, int(os.getenv("GMAIL_POLL_SECONDS", "120"))),
+        "paypal_webhook": "CONFIGURED" if bool(_get_setting("PAYPAL_WEBHOOK_ID") or os.getenv("PAYPAL_WEBHOOK_ID")) else "NOT_CONFIGURED",
+        "payment_interception": "ONLY_SUPPORTED_APP_CONTROLLED_PRE_CAPTURE_CHECKOUT",
+        "note": "Inbox monitoring starts only after explicit OAuth configuration. PayPal webhooks do not grant universal consumer-payment control."
+    }
 
 
 @app.get("/health")

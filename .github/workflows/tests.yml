@@ -7,11 +7,14 @@ on:
       - feature/investigation-refinement
       - production-hardening
       - release/evidence-backed-autonomy
+      - ux-autonomy-redesign
+      - autonomous-protection-agent
   pull_request:
     branches:
       - assistant/fix-local-api-routing
       - feature/investigation-refinement
       - production-hardening
+      - release/evidence-backed-autonomy
 
 permissions:
   contents: read
@@ -33,7 +36,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest
       - name: Compile Python modules
-        run: python -m compileall -q agent.py main.py schemas.py tools.py scoring.py watchtower.py evidence_manifest.py threat_intelligence.py elastic_intelligence.py render_dispatch.py render_workflow_tasks.py
+        run: python -m compileall -q agent.py main.py schemas.py tools.py scoring.py watchtower.py evidence_manifest.py threat_intelligence.py elastic_intelligence.py render_dispatch.py render_workflow_tasks.py protection_policy.py gmail_guardian.py
       - name: Validate frontend JavaScript syntax
         run: |
           python - <<'PY'

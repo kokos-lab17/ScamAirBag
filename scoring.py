@@ -589,9 +589,32 @@ def _build_findings(
                 "FINANCIAL_PENALTY_THREAT",
                 "The sender threatens an additional financial penalty or charge if the recipient does not comply.",
                 RiskLevel.HIGH, 15,
-                [r"\bpenalt(?:y|ies)\b", r"\bfine\b", r"\badditional\s+(?:fee|charge|payment)\b", r"\bpay\s+\$?\d+\s+more\b"],
+                [r"\bpenalt(?:y|ies)\b", r"\bfine\b", r"\badditional\s+(?:fee|charge|payment)\b", r"\bpay\s+\$?\d+\s+more\b", r"\b(?:your|you)\b.{0,60}\b(?:will\s+be\s+)?charged\b"],
                 "Penalty evidence"
             ): detected.add("penalty")
+            # Common fake-transaction / callback-support phishing pattern.
+            # The combination is materially stronger than any one keyword.
+            if add_text_finding(
+                "FAKE_TRANSACTION_CALLBACK_SCAM",
+                "The message claims there is an unauthorized PayPal/account transaction and directs the recipient to call a number supplied in the message. This is a common callback-phishing pattern. Do not call the number; contact the provider through its official app or website.",
+                RiskLevel.HIGH, 50,
+                [
+                    r"\bunauthori[sz]ed\s+(?:transac\w{0,5}|payment|purchase|charge)\b.{0,300}\bcall\s+(?:us|this\s+number|support|customer\s+service)\b",
+                    r"\b(?:transac\w{0,5}|payment|purchase|charge)\b.{0,220}\bcall\s+(?:us|this\s+number|support)\b",
+                    r"\bcall\s+(?:us|this\s+number)\b.{0,180}\b(?:unauthori[sz]ed|transac\w{0,5}|charge)\b",
+                ],
+                "Callback-phishing pattern"
+            ): detected.add("callback_phishing")
+            if add_text_finding(
+                "PAYMENT_ALERT_IMPERSONATION",
+                "The message presents itself as a PayPal or payment-provider transaction/support alert, but the claim comes only from the message and has not been authenticated.",
+                RiskLevel.HIGH, 15,
+                [
+                    r"\bpaypal\b.{0,100}\b(?:unauthori[sz]ed|transaction|order\s+id|customer\s+support)\b",
+                    r"\b(?:customer\s+support|transaction\s+alert|order\s+id)\b.{0,120}\b(?:paypal|account|transaction)\b",
+                ],
+                "Payment-provider impersonation pattern"
+            ): detected.add("payment_impersonation")
             if add_text_finding(
                 "PAYMENT_METHOD_DIVERSION",
                 "The sender directs payment through PayPal Friends and Family, a payment route that generally lacks normal purchase protection.",
