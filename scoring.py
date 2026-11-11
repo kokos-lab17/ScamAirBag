@@ -592,6 +592,29 @@ def _build_findings(
                 [r"\bpenalt(?:y|ies)\b", r"\bfine\b", r"\badditional\s+(?:fee|charge|payment)\b", r"\bpay\s+\$?\d+\s+more\b"],
                 "Penalty evidence"
             ): detected.add("penalty")
+            # Common fake-transaction / callback-support phishing pattern.
+            # The combination is materially stronger than any one keyword.
+            if add_text_finding(
+                "FAKE_TRANSACTION_CALLBACK_SCAM",
+                "The message claims there is an unauthorized PayPal/account transaction and directs the recipient to call a number supplied in the message. This is a common callback-phishing pattern. Do not call the number; contact the provider through its official app or website.",
+                RiskLevel.CRITICAL, 50,
+                [
+                    r"\bunauthori[sz]ed\s+(?:transaction|payment|purchase|charge)\b.{0,260}\bcall\s+(?:us|this\s+number|support|customer\s+service)\b",
+                    r"\b(?:transaction|payment|purchase|charge)\b.{0,180}\bcall\s+(?:us|this\s+number|support)\b.{0,100}\b(?:paypal|account)\b",
+                    r"\bcall\s+(?:us|this\s+number)\b.{0,160}\b(?:unauthori[sz]ed|transaction|charge)\b",
+                ],
+                "Callback-phishing pattern"
+            ): detected.add("callback_phishing")
+            if add_text_finding(
+                "PAYMENT_ALERT_IMPERSONATION",
+                "The message presents itself as a PayPal or payment-provider transaction/support alert, but the claim comes only from the message and has not been authenticated.",
+                RiskLevel.HIGH, 15,
+                [
+                    r"\bpaypal\b.{0,100}\b(?:unauthori[sz]ed|transaction|order\s+id|customer\s+support)\b",
+                    r"\b(?:customer\s+support|transaction\s+alert|order\s+id)\b.{0,120}\b(?:paypal|account|transaction)\b",
+                ],
+                "Payment-provider impersonation pattern"
+            ): detected.add("payment_impersonation")
             if add_text_finding(
                 "PAYMENT_METHOD_DIVERSION",
                 "The sender directs payment through PayPal Friends and Family, a payment route that generally lacks normal purchase protection.",
