@@ -60,6 +60,7 @@ def poll_gmail_once() -> dict[str, Any]:
     response.raise_for_status()
     messages = response.json().get("messages") or []
     queued = 0
+    queued_event_ids = []
     for item in messages:
         message_id = item.get("id")
         if not message_id or watchtower._event_exists("gmail:" + message_id):
@@ -85,9 +86,9 @@ def poll_gmail_once() -> dict[str, Any]:
             event_id, "GMAIL_OAUTH_READONLY", "GMAIL.MESSAGE.RECEIVED", text
         )
         if not duplicate:
-            watchtower._schedule(record["event_id"], watchtower._PUBLIC_TRACE)
             queued += 1
-    return {"enabled": True, "checked": len(messages), "processed": queued}
+            queued_event_ids.append(record["event_id"])
+    return {"enabled": True, "checked": len(messages), "processed": queued, "event_ids": queued_event_ids}
 
 
 async def gmail_guardian_loop() -> None:
@@ -96,7 +97,11 @@ async def gmail_guardian_loop() -> None:
     while True:
         if _configured():
             try:
-                await asyncio.to_thread(poll_gmail_once)
+                result = await asyncio.to_thread(poll_gmail_once)
+                import watchtower
+                for event_id in result.get("event_ids", []):
+                    if watchtower._PUBLIC_TRACE is not None:
+                        watchtower._schedule(event_id, watchtower._PUBLIC_TRACE)
             except Exception:
                 log.exception("Gmail guardian poll failed")
         await asyncio.sleep(max(60, int(os.getenv("GMAIL_POLL_SECONDS", "120"))))
