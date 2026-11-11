@@ -107,7 +107,7 @@
       <section id="verdict" class="panel">
         <div class="panel-head"><h2 class="section-title">Investigation verdict</h2><span id="completionState" class="eyebrow">Awaiting result</span></div>
         <div class="verdict">
-          <div id="scoreRing" class="score-ring"><div class="score-number"><span id="riskScore">—</span><small>RISK INDEX</small></div></div>
+          <div id="scoreRing" class="score-ring"><div class="score-number"><span id="riskScore">—</span><small>RISK SCORE</small></div></div>
           <div>
             <div class="pills"><span id="riskLevel" class="pill">Awaiting result</span><span id="confidence" class="pill">Confidence: —</span><span id="coverageScore" class="pill">Coverage: —</span></div>
             <p id="summary" class="verdict-copy">The assessment will appear here when the investigation finishes.</p>
@@ -118,18 +118,18 @@
       </section>
 
       <section id="findings" class="panel table-panel">
-        <div class="panel-head"><h2 class="section-title">Evidence findings</h2><div class="table-tools"><input id="findingsSearch" type="search" placeholder="Search findings…" aria-label="Search findings"><span id="findingCount" class="table-count">0 findings</span></div></div>
+        <div class="panel-head"><h2 class="section-title">Why this looks suspicious</h2><div class="table-tools"><input id="findingsSearch" type="search" placeholder="Search findings…" aria-label="Search findings"><span id="findingCount" class="table-count">0 findings</span></div></div>
         <div id="findingsGrid" class="ag-theme-quartz-dark" aria-label="Interactive evidence findings grid"></div>
         <div id="findingsFallback" class="status hidden">Interactive table unavailable. Findings remain available in the scorecard.</div>
         <div id="findingDetail" class="detail"><div class="detail-title">Selected finding</div><div class="status">Select a row to inspect its full supporting evidence.</div></div>
       </section>
 
       <div class="lower-grid">
-        <section id="coverage" class="panel"><div class="panel-head"><h2 class="section-title">Evidence checks</h2><span class="eyebrow">Source coverage</span></div><div id="sources" class="source-list"><div class="status">Waiting for source checks.</div></div></section>
-        <section id="activity" class="panel"><div class="panel-head"><h2 class="section-title">Investigation activity</h2><span class="eyebrow">Progress log</span></div><div id="timeline" class="timeline"><div class="status">Waiting for agent activity.</div></div></section>
+        <section id="coverage" class="panel"><div class="panel-head"><h2 class="section-title">What ScamAirbag checked</h2><span class="eyebrow">Source coverage</span></div><div id="sources" class="source-list"><div class="status">Waiting for source checks.</div></div></section>
+        <section id="activity" class="panel"><div class="panel-head"><h2 class="section-title">What ScamAirbag did</h2><span class="eyebrow">Progress log</span></div><div id="timeline" class="timeline"><div class="status">Waiting for agent activity.</div></div></section>
       </div>
       <section id="evidenceReceipt" class="panel">
-        <div class="panel-head"><h2 class="section-title">Evidence receipt</h2><span class="eyebrow">Integrity manifest</span></div>
+        <div class="panel-head"><h2 class="section-title">Evidence integrity receipt</h2><span class="eyebrow">Integrity manifest</span></div>
         <div class="detail">
           <div class="detail-label">Manifest SHA-256 root</div>
           <div id="evidenceRootHash" class="detail-text">Waiting for completed evidence.</div>
@@ -161,7 +161,36 @@
       let activeController = null;
       let gridApi = null;
 
-      const pretty = (value) => String(value ?? "Unknown").replaceAll("_", " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+      const FRIENDLY_LABELS = {
+        paypal_invoice: "PayPal invoice lookup",
+        paypal_order: "PayPal order lookup",
+        paypal_subscription: "PayPal subscription lookup",
+        domain_intelligence: "Website and domain checks",
+        link_redirect_inspection: "Link destination check",
+        threat_intelligence: "Known threat database check",
+        historical_pattern_search: "Previous scam-pattern check",
+        email_authentication: "Email sender authentication",
+        email_authentication_headers: "Email sender authentication",
+        message_context: "Message analysis",
+        extract_message_context: "Message analysis",
+        VERIFIED_PAYPAL: "Confirmed by PayPal",
+        OBSERVED_EXTERNAL: "Observed from an external source",
+        AI_INFERRED: "AI interpretation — not independently confirmed",
+        USER_PROVIDED: "Information from the submitted message",
+        UNAVAILABLE: "Could not be checked",
+        HISTORICAL_CASE: "Previous ScamAirbag case",
+        SUCCESS: "Completed",
+        VERIFIED: "Confirmed",
+        FAILED: "Could not complete",
+        TIMEOUT: "Timed out",
+        SKIPPED: "Not checked",
+        NOT_APPLICABLE: "Not needed for this message"
+      };
+      const pretty = (value) => {
+        const key = String(value ?? "Unknown");
+        if (FRIENDLY_LABELS[key]) return FRIENDLY_LABELS[key];
+        return key.replaceAll("_", " ").toLowerCase().replace(/\\b\\w/g, c => c.toUpperCase());
+      };
       const safeText = (value, max = 260) => {
         const text = String(value ?? "").replace(/\s+/g, " ").trim();
         return text.length > max ? `${text.slice(0, max - 1)}…` : text;
