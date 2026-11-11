@@ -589,7 +589,7 @@ def _build_findings(
                 "FINANCIAL_PENALTY_THREAT",
                 "The sender threatens an additional financial penalty or charge if the recipient does not comply.",
                 RiskLevel.HIGH, 15,
-                [r"\bpenalt(?:y|ies)\b", r"\bfine\b", r"\badditional\s+(?:fee|charge|payment)\b", r"\bpay\s+\$?\d+\s+more\b"],
+                [r"\bpenalt(?:y|ies)\b", r"\bfine\b", r"\badditional\s+(?:fee|charge|payment)\b", r"\bpay\s+\$?\d+\s+more\b", r"\b(?:your|you)\b.{0,60}\b(?:will\s+be\s+)?charged\b"],
                 "Penalty evidence"
             ): detected.add("penalty")
             # Common fake-transaction / callback-support phishing pattern.
