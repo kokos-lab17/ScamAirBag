@@ -599,9 +599,9 @@ def _build_findings(
                 "The message claims there is an unauthorized PayPal/account transaction and directs the recipient to call a number supplied in the message. This is a common callback-phishing pattern. Do not call the number; contact the provider through its official app or website.",
                 RiskLevel.CRITICAL, 50,
                 [
-                    r"\bunauthori[sz]ed\s+(?:transaction|payment|purchase|charge)\b.{0,260}\bcall\s+(?:us|this\s+number|support|customer\s+service)\b",
-                    r"\b(?:transaction|payment|purchase|charge)\b.{0,180}\bcall\s+(?:us|this\s+number|support)\b.{0,100}\b(?:paypal|account)\b",
-                    r"\bcall\s+(?:us|this\s+number)\b.{0,160}\b(?:unauthori[sz]ed|transaction|charge)\b",
+                    r"\bunauthori[sz]ed\s+(?:transac\w{0,5}|payment|purchase|charge)\b.{0,300}\bcall\s+(?:us|this\s+number|support|customer\s+service)\b",
+                    r"\b(?:transac\w{0,5}|payment|purchase|charge)\b.{0,220}\bcall\s+(?:us|this\s+number|support)\b",
+                    r"\bcall\s+(?:us|this\s+number)\b.{0,180}\b(?:unauthori[sz]ed|transac\w{0,5}|charge)\b",
                 ],
                 "Callback-phishing pattern"
             ): detected.add("callback_phishing")
