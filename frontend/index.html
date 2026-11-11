@@ -54,27 +54,29 @@
     @media(min-width:1200px){.shell{width:min(1700px,calc(100% - 64px))}.panel{padding:22px}.table-panel{padding:20px 20px 15px}}
     @media(max-width:820px){.shell{width:calc(100% - 28px);padding-top:18px}.topbar{align-items:flex-start;flex-direction:column}.api{width:100%;max-width:none}.input-grid,.lower-grid{grid-template-columns:1fr}.verdict{grid-template-columns:108px minmax(0,1fr);gap:14px}.score-ring{width:100px;height:100px}.score-number{font-size:27px}.panel{padding:16px}#findingsGrid{height:470px}.table-count{margin-left:0}}
     @media(max-width:520px){.nav{position:static}.nav a{padding:6px 8px}.verdict{grid-template-columns:1fr}.score-ring{width:90px;height:90px}.detail-grid{grid-template-columns:1fr}.actions .btn{flex:1}.table-tools input{width:100%}}
+  
+    .developer-settings{margin-left:auto;max-width:520px;color:var(--muted);font-size:12px}.developer-settings summary,.advanced-inputs summary,.advanced-controls summary{cursor:pointer;color:#cbd9e8;font-weight:700;padding:8px 0}.developer-settings .api{width:100%;max-width:none;margin-top:10px}.advanced-inputs,.advanced-controls{border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:12px 0 16px;background:#0d1928}.advanced-inputs summary span{font-weight:400;color:var(--muted);margin-left:8px}.advanced-controls{margin-top:12px}.advanced-controls[open],.advanced-inputs[open]{padding-bottom:14px}.advanced-inputs .field{margin-top:12px}.advanced-controls .input-grid{margin-top:12px}.nav{position:static}.nav a{font-size:13px}.api input{font-size:12px}.topbar{align-items:flex-start}.panel-head p{margin-bottom:0}.panel-head>div:first-child{min-width:0}@media(max-width:820px){.developer-settings{width:100%;max-width:none}.topbar{gap:10px}}
   </style>
 </head>
 <body>
   <main class="shell">
     <header class="topbar">
       <div class="brand"><div class="logo">A</div><div><h1>ScamAirbag</h1><div class="subtitle">Pre-payment investigation workspace</div></div></div>
-      <div class="api">
+      <details class="developer-settings"><summary>Developer settings</summary><div class="api">
         <label for="apiBase">API endpoint</label><input id="apiBase" aria-label="API base URL">
         <label for="apiAccessToken">Service token</label><input id="apiAccessToken" type="password" autocomplete="off" aria-label="ScamAirbag service access token" placeholder="Service token">
-      </div>
+      </div><p class="hint">These settings are for the person running the ScamAirbag service. Regular users should not need to change them.</p></details>
     </header>
 
     <nav class="nav" aria-label="Page sections">
-      <a href="#watchtower">Watchtower</a><a href="#analyze">Analyze</a><a href="#verdict">Verdict</a><a href="#findings">Findings</a><a href="#coverage">Evidence checks</a><a href="#activity">Activity</a>
+      <a href="#analyze">Check a message</a><a href="#watchtower">Background protection</a><a href="#results">Latest assessment</a>
     </nav>
 
 
     <section id="watchtower" class="panel" style="margin-bottom:18px">
-      <div class="panel-head"><h2 class="section-title">Airbag Watchtower</h2><span id="watchtowerState" class="eyebrow">Checking listener…</span></div>
-      <p id="watchtowerNote" class="hint">Event-driven monitoring workspace. Live PayPal monitoring is not claimed until a verified event source is connected.</p>
-      <div class="hint">The service token is used for protected investigation and Watchtower actions. It is held only in this page session; do not share it.</div>
+      <div class="panel-head"><div><h2 class="section-title">Background protection</h2><p class="hint">ScamAirbag can investigate supported PayPal events automatically after an administrator connects and configures a PayPal webhook.</p></div><span id="watchtowerState" class="eyebrow">Checking…</span></div>
+      <p id="watchtowerNote" class="hint">Not connected yet. Message checks work independently of background monitoring.</p>
+      <details class="advanced-controls"><summary>Administrator controls and event history</summary><div class="hint">These controls are for configuring and testing the PayPal integration, not for everyday message checks. The access token is held only in this page session.</div>
       <div class="input-grid">
         <div class="field"><label for="watchtowerInvoice">PayPal Sandbox invoice ID</label><input id="watchtowerInvoice" maxlength="200" placeholder="Enter an existing Sandbox invoice ID"></div>
         <div class="field" style="display:flex;align-items:end"><button id="simulateInvoiceButton" class="btn" type="button" disabled>Simulate incoming invoice event</button></div>
@@ -83,20 +85,21 @@
       <div id="watchtowerAlerts" class="timeline" style="margin-top:14px"><div class="status">No alerts yet.</div></div>
       <div id="watchtowerEvents" class="timeline" style="margin-top:16px"><div class="status">No events loaded.</div></div>
       <div id="watchtowerDetail" class="detail" style="margin-top:16px"><div class="detail-title">Event evidence</div><div class="status">Select an event to inspect its investigation evidence.</div></div>
-      <div class="hint">The simulator is explicitly labelled. It triggers an automatic investigation and attempts a real PayPal Sandbox invoice lookup; it does not fabricate invoice evidence or represent a real webhook.</div>
+      <div class="hint">The simulator is explicitly labelled. It triggers an automatic investigation and attempts a real PayPal Sandbox invoice lookup; it does not fabricate invoice evidence or represent a real webhook.</div></details>
     </section>
 
     <section id="analyze" class="panel">
-      <div class="panel-head"><h2 class="section-title">Investigate a payment request</h2><span class="eyebrow">Start here</span></div>
+      <div class="panel-head"><div><h2 class="section-title">Check a suspicious message</h2><p class="hint">Paste the message exactly as you received it. You do not need to identify the scam or fill in transaction details.</p></div><span class="eyebrow">One step</span></div>
       <form id="investigationForm">
-        <div class="field"><label for="userText">Message, email or payment instructions</label><textarea id="userText" maxlength="12000" placeholder="Paste the suspicious message or payment request here…"></textarea><div class="hint">Treat this as untrusted evidence. Remove passwords, verification codes and unrelated personal information before submitting.</div></div>
-        <div class="field"><label for="emailHeaders">Raw email headers <span style="color:var(--muted);font-weight:450">(optional · authentication checks)</span></label><textarea id="emailHeaders" maxlength="12000" placeholder="Paste the email headers only (From, Return-Path, Authentication-Results, Received-SPF, DKIM-Signature)…"></textarea><div class="hint">Do not paste the email body, passwords, verification codes or unrelated personal information. Header results are claims until the receiving mail server is trusted.</div></div>
+        <div class="field"><label for="userText">What did you receive?</label><textarea id="userText" maxlength="12000" placeholder="Paste the complete suspicious SMS, email, chat, or payment request…"></textarea><div class="hint">That is all you need to provide. ScamAirbag will extract relevant details and choose which checks are useful. Never include passwords or one-time verification codes.</div></div>
+        <details class="advanced-inputs"><summary>Advanced options <span>Only use these if you know you need them</span></summary><div class="field"><label for="emailHeaders">Raw email headers <span style="color:var(--muted);font-weight:450">(optional · authentication checks)</span></label><textarea id="emailHeaders" maxlength="12000" placeholder="Paste the email headers only (From, Return-Path, Authentication-Results, Received-SPF, DKIM-Signature)…"></textarea><div class="hint">Do not paste the email body, passwords, verification codes or unrelated personal information. Header results are claims until the receiving mail server is trusted.</div></div>
         <div class="input-grid">
           <div class="field"><label for="identifier">PayPal Sandbox ID <span style="color:var(--muted);font-weight:450">(optional)</span></label><input id="identifier" maxlength="200" placeholder="Invoice, order or subscription ID"></div>
           <div class="field"><label for="identifierHint">ID type</label><select id="identifierHint"><option value="UNKNOWN">No ID supplied</option><option value="INVOICE">Invoice</option><option value="ORDER">Order</option><option value="SUBSCRIPTION">Subscription</option></select></div>
         </div>
         <label class="consent"><input id="shareIntelligence" type="checkbox"><span>Optional: contribute minimized investigation indicators to Elastic intelligence. Only domains, finding rule IDs and a coarse risk band are stored—not the message, PayPal IDs or email addresses.</span></label>
-        <div class="actions"><button id="submitButton" class="btn" type="submit">Start investigation</button><button id="clearButton" class="btn secondary" type="button">Clear</button><span id="status" class="status" role="status">Ready when you are.</span></div>
+        </details>
+        <div class="actions"><button id="submitButton" class="btn" type="submit">Investigate message</button><button id="clearButton" class="btn secondary" type="button">Clear</button><span id="status" class="status" role="status">Paste a message to begin. No other fields are required.</span></div>
       </form>
     </section>
 
