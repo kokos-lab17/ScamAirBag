@@ -7,11 +7,13 @@ on:
       - feature/investigation-refinement
       - production-hardening
       - release/evidence-backed-autonomy
+      - ux-autonomy-redesign
   pull_request:
     branches:
       - assistant/fix-local-api-routing
       - feature/investigation-refinement
       - production-hardening
+      - release/evidence-backed-autonomy
 
 permissions:
   contents: read
