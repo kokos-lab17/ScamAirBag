@@ -597,7 +597,7 @@ def _build_findings(
             if add_text_finding(
                 "FAKE_TRANSACTION_CALLBACK_SCAM",
                 "The message claims there is an unauthorized PayPal/account transaction and directs the recipient to call a number supplied in the message. This is a common callback-phishing pattern. Do not call the number; contact the provider through its official app or website.",
-                RiskLevel.CRITICAL, 50,
+                RiskLevel.HIGH, 50,
                 [
                     r"\bunauthori[sz]ed\s+(?:transac\w{0,5}|payment|purchase|charge)\b.{0,300}\bcall\s+(?:us|this\s+number|support|customer\s+service)\b",
                     r"\b(?:transac\w{0,5}|payment|purchase|charge)\b.{0,220}\bcall\s+(?:us|this\s+number|support)\b",
