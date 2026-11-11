@@ -13,6 +13,7 @@ from agent import MAX_INVESTIGATION_SECONDS, run_investigation
 from schemas import InvestigationInput, InvestigationTrace
 
 router = APIRouter(prefix="/api/v1/watchtower", tags=["Watchtower"])
+_PUBLIC_TRACE = None
 _DB_PATH = os.getenv("WATCHTOWER_DB_PATH", "watchtower.sqlite3")
 _DEMO_ENABLED = os.getenv("WATCHTOWER_DEMO_ENABLED", "false").lower() in {"1","true","yes"}
 _INGEST_TOKEN = os.getenv("SCAM_AIRBAG_API_TOKEN") or os.getenv("WATCHTOWER_INGEST_TOKEN", "")
@@ -46,7 +47,10 @@ def init_watchtower():
         event_id TEXT PRIMARY KEY, source TEXT NOT NULL, event_type TEXT NOT NULL,
         identifier TEXT NOT NULL, identifier_hint TEXT NOT NULL, status TEXT NOT NULL,
         received_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT,
-        completed_at TEXT, result_json TEXT, error_code TEXT)""")
+        completed_at TEXT, result_json TEXT, error_code TEXT, message_text TEXT)""")
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(watchtower_events)")}
+        if "message_text" not in columns:
+            db.execute("ALTER TABLE watchtower_events ADD COLUMN message_text TEXT")
         db.execute("CREATE INDEX IF NOT EXISTS idx_watchtower_received ON watchtower_events(received_at DESC)")
         db.execute("CREATE TABLE IF NOT EXISTS watchtower_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL)")
         # Event records contain transaction identifiers and investigation evidence.
@@ -122,6 +126,25 @@ class DemoEventRequest(BaseModel):
 def _require_ingest_token(token:Optional[str]):
     if not _INGEST_TOKEN or not token or not hmac.compare_digest(_INGEST_TOKEN,token):
         raise HTTPException(status_code=401,detail="A valid Watchtower ingest token is required.")
+
+def _event_exists(event_id: str) -> bool:
+    with _db() as db:
+        return db.execute("SELECT 1 FROM watchtower_events WHERE event_id=?", (event_id,)).fetchone() is not None
+
+
+def _create_message_event(event_id: str, source: str, event_type: str, message_text: str):
+    now = _now()
+    with _db() as db:
+        cursor = db.execute(
+            """INSERT OR IGNORE INTO watchtower_events
+            (event_id,source,event_type,identifier,identifier_hint,status,received_at,updated_at,message_text)
+            VALUES (?,?,?,'','UNKNOWN','RECEIVED',?,?,?)""",
+            (event_id, source, event_type, now, now, message_text[:12000]),
+        )
+        inserted = cursor.rowcount == 1
+        row = db.execute("SELECT * FROM watchtower_events WHERE event_id=?", (event_id,)).fetchone()
+    return _row(row), not inserted
+
 
 def _create_event(event_id,source,event_type,identifier,hint):
     now=_now()
@@ -239,7 +262,12 @@ async def _investigate_event(event_id,public_trace):
             return
         r=db.execute("SELECT * FROM watchtower_events WHERE event_id=?",(event_id,)).fetchone()
     try:
-        payload=InvestigationInput(identifier=r["identifier"],identifier_hint=r["identifier_hint"],share_anonymized_intelligence=os.getenv("WATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE","false").lower() in {"1","true","yes"})
+        payload=InvestigationInput(
+            user_text=r["message_text"] if "message_text" in r.keys() and r["message_text"] else None,
+            identifier=r["identifier"] or None,
+            identifier_hint=r["identifier_hint"],
+            share_anonymized_intelligence=os.getenv("WATCHTOWER_SHARE_ANONYMIZED_INTELLIGENCE","false").lower() in {"1","true","yes"}
+        )
         trace=await asyncio.wait_for(
             asyncio.to_thread(run_investigation, payload),
             timeout=MAX_INVESTIGATION_SECONDS + 45,
@@ -252,10 +280,13 @@ async def _investigate_event(event_id,public_trace):
             result["watchtower_alert"]["historical_context"] = correlations
         status="COMPLETED" if trace.status=="COMPLETED" else "PARTIAL" if trace.status=="PARTIAL" else "FAILED"
         _update(event_id,status=status,completed_at=_now(),result_json=json.dumps(result,separators=(",",":"),ensure_ascii=False),error_code=trace.error_code)
+        with _db() as db: db.execute("UPDATE watchtower_events SET message_text=NULL WHERE event_id=?", (event_id,))
     except asyncio.TimeoutError:
         _update(event_id,status="FAILED",completed_at=_now(),error_code="WATCHTOWER_INVESTIGATION_TIMEOUT")
+        with _db() as db: db.execute("UPDATE watchtower_events SET message_text=NULL WHERE event_id=?", (event_id,))
     except Exception:
         _update(event_id,status="FAILED",completed_at=_now(),error_code="WATCHTOWER_INVESTIGATION_FAILED")
+        with _db() as db: db.execute("UPDATE watchtower_events SET message_text=NULL WHERE event_id=?", (event_id,))
 
 def _schedule(event_id,public_trace):
     async def bounded_investigation():
