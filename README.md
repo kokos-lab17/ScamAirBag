@@ -275,3 +275,64 @@ Import `postman/ScamAirbag.postman_collection.json` into Postman. Set `baseUrl` 
 - Keep PayPal Sandbox credentials and event subscriptions separate from Live. This release is an evidence-backed decision-support system; it never executes, approves, declines, cancels, or moves money.
 - The evidence manifest's HMAC signature detects report edits unless the signing secret is compromised. It is a ScamAirbag server signature, not a digital signature from PayPal, VirusTotal, WHOIS, or a mail provider. Email headers pasted by a user remain untrusted claims until independently authenticated.
 - The app has automated regression coverage, but live PayPal webhook delivery, PayPal API permissions, Render persistent disk behavior, and third-party API quotas must still be verified in the target account before production use.
+
+
+## Background protection agent (opt-in)
+
+ScamAirbag now has an event-driven protection layer in addition to the manual
+message-check workflow:
+
+- **PayPal Watchtower:** verified PayPal webhook events are queued, deduplicated,
+  persisted, investigated in the background, and recovered after API restart.
+  PayPal webhooks cover only events configured for the connected REST app; they
+  are not a feed of every consumer PayPal payment.
+- **Gmail inbox guardian:** an optional read-only Gmail connector polls the
+  connected inbox, queues new messages for investigation, and records a
+  minimized public evidence result. Message content is cleared from the event
+  record after the investigation completes or fails. The connector is disabled
+  until OAuth credentials are configured by the account owner.
+- **Autonomous policy:** the protection policy selects monitoring, notification,
+  verification, or human approval based on risk and investigation completeness.
+  It never treats missing evidence as proof of safety.
+- **Payment boundary:** a high-risk finding can be translated into a reversible
+  hold only inside an app-controlled checkout that has an authorised,
+  not-yet-captured payment and an explicit user policy enabling that hold.
+  The current PayPal webhook integration cannot freeze or cancel unrelated
+  consumer payments. No funds are moved by the agent.
+
+### Enabling Gmail monitoring
+
+Create a Google Cloud project, enable the Gmail API, configure OAuth consent,
+and obtain a refresh token for the read-only scope:
+
+`https://www.googleapis.com/auth/gmail.readonly`
+
+Set these server-side environment variables on the API service (never in the
+frontend and never commit their values):
+
+- `GMAIL_OAUTH_CLIENT_ID`
+- `GMAIL_OAUTH_CLIENT_SECRET`
+- `GMAIL_OAUTH_REFRESH_TOKEN`
+- Optional: `GMAIL_POLL_SECONDS` (minimum 60; default 120)
+
+The API status endpoint `GET /api/v1/guardian/status` reports whether Gmail
+credentials are configured without exposing them. The worker begins polling
+only when all three credentials exist. Disconnect by removing the refresh
+token and restarting the API. Use the narrow read-only scope and a dedicated
+OAuth project; Google may require consent-screen verification before broad
+production distribution.
+
+### Current integration limits
+
+The Gmail connector is a polling prototype, not instant push delivery. It
+checks up to 25 messages from the last day per poll. A user must explicitly
+connect an account by configuring OAuth. The app does not monitor SMS, other
+mailboxes, browser tabs, or arbitrary third-party checkouts. A future checkout
+adapter must own the checkout flow and prove the payment is still pre-capture
+before it can pause capture. Do not interpret a PayPal webhook as permission
+to block a payment.
+
+The protection-policy module is a decision boundary, not a PayPal payment
+control adapter. Production payment holds require a separately authorised
+merchant/partner checkout integration and end-to-end testing in its supported
+environment.
